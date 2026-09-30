@@ -10,6 +10,7 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 ROOT="$(mktemp -d)"
 REAL_HOME="$HOME"
 trap '[ "${KEEP:-}" = 1 ] && echo "kept: $ROOT" || rm -rf "$ROOT"' EXIT
+trap 'echo "  FAIL  command on line $LINENO exited with an error"' ERR
 
 pass() { echo "  ok    $*"; }
 fail() { echo "  FAIL  $*"; exit 1; }
@@ -23,7 +24,10 @@ as() {
     GIT_CONFIG_GLOBAL="$ROOT/$who/.gitconfig" "$@"
 }
 vl() { local who="$1"; shift; as "$who" uv run --quiet --project "$REPO" vl "$@"; }
-bmtool() { local who="$1"; shift; as "$who" uvx basic-memory tool "$@" >/dev/null 2>&1; }
+bmtool() {
+  local who="$1" out; shift
+  out="$(as "$who" uvx basic-memory tool "$@" 2>&1)" || { echo "$out" | tail -5; return 1; }
+}
 servers() { jq -r --arg f "$2" '.projects[$f].mcpServers // {} | keys | join(",")' "$ROOT/$1/.claude/.claude.json"; }
 
 mkdir -p "$ROOT/remotes" "$ROOT/alice" "$ROOT/bob"
