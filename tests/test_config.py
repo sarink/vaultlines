@@ -1,32 +1,35 @@
 import pytest
 
 from vaultlines import config
-from vaultlines.config import STAR, Config, Folder, Vault
+from vaultlines.config import Config, Folder, Vault, folder_for
 from vaultlines.util import VlError
 
 GOOD = """
 [settings]
-sync_interval = 600
+sync_interval  = 600
+check_interval = 86400
+on_leak        = "ask"
 
 [vaults.personal]
-path = "~/Vaults/personal"
+path   = "~/Vaults/personal"
 remote = "https://github.com/sam/vault-personal.git"
 
 [vaults.acme-everyone]
-path = "~/Vaults/acme-everyone"
+path   = "~/Vaults/acme-everyone"
 remote = "https://github.com/acme/acme-everyone"
 
 [vaults.side]
-path = "~/Vaults/side"
+path   = "~/Vaults/side"
 
-[folders."*"]
+[folders."~"]
 writes = "personal"
-reads = []
 
 [folders."{folder}"]
-writes = "side"
-reads = ["acme-everyone"]
+writes    = "side"
+reads     = ["acme-everyone"]
 auto_pull = true
+
+[adapters.basic-memory]
 """
 
 
@@ -45,9 +48,12 @@ def test_load_good_config(cfg_file, tmp_path):
     write(cfg_file, GOOD, tmp_path)
     cfg = config.load()
     assert cfg.vaults["side"].remote is None
-    assert cfg.star == Folder(STAR, "personal", [])
+    assert cfg.on_leak == "ask"
+    assert cfg.basic_memory and cfg.bm_command == "uvx basic-memory"
     f = cfg.folders[str(tmp_path.resolve())]
     assert (f.writes, f.reads, f.auto_pull) == ("side", ["acme-everyone"], True)
+    home = cfg.folders[str(config.expand("~"))]
+    assert home.reads == []  # reads is optional
 
 
 def test_round_trip(cfg_file, tmp_path):
@@ -57,25 +63,33 @@ def test_round_trip(cfg_file, tmp_path):
     again = config.load()
     assert again.vaults == cfg.vaults
     assert again.folders == cfg.folders
-    assert '[folders."*"]' in cfg_file.read_text()
+    assert again.adapters == {"basic-memory": {}}
+    text = cfg_file.read_text()
+    assert '[folders."~"]' in text
+    assert "[adapters.basic-memory]" in text
 
 
+def test_adapter_absent_is_off(cfg_file, tmp_path):
+    write(cfg_file, GOOD.replace("[adapters.basic-memory]\n", ""), tmp_path)
+    assert not config.load().basic_memory
 
 
 @pytest.mark.parametrize("old, new, message", [
-    ('writes = "side"\n', "", ".writes: missing"),
-    ('reads = ["acme-everyone"]\n', "", ".reads: missing"),
-    ('writes = "side"', 'writes = "nope"', "no vault named 'nope'"),
-    ('reads = ["acme-everyone"]', 'reads = ["nope"]', "no vault named 'nope'"),
-    ('reads = ["acme-everyone"]', 'reads = ["side"]', "can't also be in reads"),
-    ('[folders."*"]\nwrites = "personal"\nreads = []',
-     '[folders."*"]\nwrites = "personal"\nreads = []\nauto_pull = true', 'folders."*".auto_pull'),
+    ('writes    = "side"\n', "", ".writes: missing"),
+    ('writes    = "side"', 'writes = "nope"', "no vault named 'nope'"),
+    ('reads     = ["acme-everyone"]', 'reads = ["nope"]', "no vault named 'nope'"),
+    ('reads     = ["acme-everyone"]', 'reads = ["side"]', "can't also be in reads"),
+    ('reads     = ["acme-everyone"]', 'reads = "acme-everyone"', "list of vault names"),
+    ('[folders."~"]', '[folders."*"]', 'use "~"'),
+    ('on_leak        = "ask"', 'on_leak = "warn"', "on_leak"),
+    ("check_interval = 86400", "check_interval = 0", "check_interval"),
     ('remote = "https://github.com/acme/acme-everyone"', 'remote = "git@github.com:acme/x.git"', "must be GitHub URLs"),
     ('remote = "https://github.com/acme/acme-everyone"', 'remote = "https://gitlab.com/acme/x.git"', "must be GitHub URLs"),
     ("auto_pull = true", "autopull = true", "unknown key"),
-    ('[vaults.side]', '[vaults.Side]', "lowercase"),
-    ('[folders."*"]\nwrites = "personal"\nreads = []',
-     '[folders."*"]\nwrites = "personal"\nreads = ["side"]', "asks first in every folder"),
+    ("[vaults.side]", "[vaults.Side]", "lowercase"),
+    ("[adapters.basic-memory]", "[adapters.other-memory]", "unknown adapter"),
+    ("[adapters.basic-memory]", '[adapters.basic-memory]\nservers = "x"', "unknown key"),
+    ("[adapters.basic-memory]", '[adapters.basic-memory]\ncommand = ""', "should be a command"),
 ])
 def test_validation_errors(cfg_file, tmp_path, old, new, message):
     text = GOOD.replace(old, new, 1)
@@ -88,7 +102,7 @@ def test_validation_errors(cfg_file, tmp_path, old, new, message):
 
 
 def test_same_folder_twice(cfg_file, tmp_path):
-    write(cfg_file, GOOD + f'\n[folders."{tmp_path}/"]\nwrites = "side"\nreads = []\n', tmp_path)
+    write(cfg_file, GOOD + f'\n[folders."{tmp_path}/"]\nwrites = "side"\n', tmp_path)
     with pytest.raises(VlError, match="same folder"):
         config.load()
 
@@ -104,7 +118,22 @@ def test_file_remotes_only_in_tests(cfg_file, tmp_path, monkeypatch):
 def test_save_refuses_invalid(cfg_file, tmp_path):
     cfg = Config()
     cfg.vaults["personal"] = Vault("personal", tmp_path)
-    cfg.folders[STAR] = Folder(STAR, "missing", [])
+    cfg.folders["/x"] = Folder("/x", "missing")
     with pytest.raises(VlError):
         config.save(cfg)
     assert not cfg_file.exists()
+
+
+def test_folder_for_uses_the_closest_listed_parent(tmp_path):
+    cfg = Config()
+    home = config.expand("~")
+    for path, writes in ((str(home), "personal"), (str(tmp_path / "acme"), "mp"),
+                         (str(tmp_path / "acme" / "site"), "pub")):
+        cfg.folders[path] = Folder(path, writes)
+    (tmp_path / "acme" / "site" / "sub").mkdir(parents=True)
+    (tmp_path / "acme-other").mkdir()
+    assert folder_for(cfg, tmp_path / "acme" / "site" / "sub").writes == "pub"
+    assert folder_for(cfg, tmp_path / "acme").writes == "mp"
+    assert folder_for(cfg, tmp_path / "acme-other") is None or folder_for(cfg, tmp_path / "acme-other").writes != "mp"
+    assert folder_for(cfg, home / "anything").writes == "personal"
+    assert folder_for(cfg, "/") is None

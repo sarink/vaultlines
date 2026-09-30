@@ -1,7 +1,7 @@
 [project]
 name = "vaultlines"
-version = "0.2.0"
-description = "Personal and team Basic Memory vaults for Claude Code. Folders declare what they write and read; GitHub access lists keep notes from leaking."
+version = "0.3.0"
+description = "Personal and team markdown vaults for Claude Code. Git syncs them, GitHub says who can see each one, and a Claude Code hook stops a session from copying notes to people who could not see them."
 readme = "README.md"
 license = "MIT"
 authors = [{ name = "Kabir Sarin" }]
@@ -10,7 +10,7 @@ dependencies = ["tomli-w>=1.0"]
 keywords = ["claude", "claude-code", "basic-memory", "obsidian", "knowledge-base", "mcp"]
 
 [project.scripts]
-vl = "vaultlines.cli:main"
+vl = "vaultlines:main"
 
 [project.urls]
 Homepage = "https://github.com/sarink/vaultlines"

@@ -37,6 +37,26 @@ def expand(path: str | Path) -> Path:
     return Path(os.path.expanduser(str(path))).resolve()
 
 
+def state_dir() -> Path:
+    """Where vl keeps files the hook reads: ~/.local/state/vaultlines."""
+    base = os.environ.get("XDG_STATE_HOME") or str(home() / ".local" / "state")
+    return Path(base) / "vaultlines"
+
+
+def inside(path: str, folder: str) -> bool:
+    """True if `path` is `folder` or something in it. Both must be absolute and normalized."""
+    return path == folder or path.startswith(folder.rstrip("/") + "/")
+
+
+def closest_parent(folders, path: str) -> str | None:
+    """The deepest of `folders` that contains `path`, or None."""
+    best = None
+    for f in folders:
+        if inside(path, f) and (best is None or len(f) > len(best)):
+            best = f
+    return best
+
+
 def contract(path: str | Path) -> str:
     """Show a path with ~ for the home folder."""
     text = str(path)

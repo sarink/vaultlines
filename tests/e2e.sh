@@ -8,7 +8,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-ROOT="$(mktemp -d)"
+ROOT="$(cd "$(mktemp -d)" && pwd -P)"
 REAL_HOME="$HOME"
 trap '[ "${KEEP:-}" = 1 ] && echo "kept: $ROOT" || rm -rf "$ROOT"' EXIT
 trap 'echo "  FAIL  command on line $LINENO exited with an error"' ERR
@@ -31,6 +31,7 @@ AUDIENCES="$(jq -nc --arg r "$R" '{
 as() {
   local who="$1"; shift
   HOME="$ROOT/$who" CLAUDE_CONFIG_DIR="$ROOT/$who/.claude" VAULTLINES_NO_LAUNCHD=1 VAULTLINES_NO_NOTIFY=1 \
+    XDG_CONFIG_HOME="$ROOT/$who/.config" XDG_STATE_HOME="$ROOT/$who/.local/state" \
     VAULTLINES_TEST_REMOTES=1 VAULTLINES_FAKE_AUDIENCE="$(jq -c --arg me "$who" '. + {me: $me}' <<<"$AUDIENCES")" \
     UV_CACHE_DIR="${UV_CACHE_DIR:-$REAL_HOME/.cache/uv}" HF_HOME="${HF_HOME:-$REAL_HOME/.cache/huggingface}" \
     GIT_CONFIG_GLOBAL="$ROOT/$who/.gitconfig" "$@"
@@ -40,14 +41,34 @@ bmtool() {
   local who="$1" out; shift
   out="$(as "$who" uvx basic-memory tool "$@" 2>&1)" || { echo "$out" | tail -5; return 1; }
 }
-servers() { jq -r --arg f "$2" '.projects[$f].mcpServers // {} | keys | join(",")' "$ROOT/$1/.claude/.claude.json"; }
 user_servers() { jq -r '.mcpServers // {} | keys | join(",")' "$ROOT/$1/.claude/.claude.json"; }
+folder_servers() { jq -r --arg f "$2" '.projects[$f].mcpServers // {} | keys | join(",")' "$ROOT/$1/.claude/.claude.json"; }
+runtime() { cat "$ROOT/$1/.local/state/vaultlines/runtime.json"; }
+# Feed one hook event to `vl hook` as Claude Code would, and print the decision.
+hook() {
+  local who="$1" cwd="$2" event="$3" out
+  out="$(jq -c --arg cwd "$cwd" '. + {cwd: $cwd, session_id: (.session_id // "e2e-session")}' <<<"$event" \
+    | CLAUDE_PROJECT_DIR="$cwd" vl "$who" hook)"
+  if [ -z "$out" ]; then echo allow; return; fi
+  jq -r '.hookSpecificOutput.permissionDecision // .hookSpecificOutput.additionalContext // "allow"' <<<"$out"
+}
+write_event() { jq -nc --arg p "$1" '{hook_event_name: "PreToolUse", tool_name: "Write", tool_input: {file_path: $p, content: "x"}}'; }
+read_event() { jq -nc --arg p "$1" '{hook_event_name: "PreToolUse", tool_name: "Read", tool_input: {file_path: $p}}'; }
 
 for who in alice bob; do git config --file "$ROOT/$who/.gitconfig" init.defaultBranch main; done
 for r in acme-founders acme-everyone workspace; do git init -q --bare -b main "$ROOT/remotes/$r.git"; done
 
 echo "== alice: init, two team vaults, two folders"
 vl alice init --local >/dev/null
+CONFIG="$ROOT/alice/.config/vaultlines/config.toml"
+check "init lists ~ with the personal vault" grep -q '^\[folders."~"\]' "$CONFIG"
+check "init turns the Basic Memory adapter on" grep -q '^\[adapters.basic-memory\]' "$CONFIG"
+check "hooks installed for SessionStart and PreToolUse" \
+  jq -e '[.hooks.SessionStart[].hooks[].command, .hooks.PreToolUse[].hooks[].command] | map(endswith("vl hook")) | all and length == 2' "$ROOT/alice/.claude/settings.json"
+check "one basic-memory server, at user level" test "$(user_servers alice)" = "basic-memory"
+check "the server isn't locked to one project" jq -e '.mcpServers["basic-memory"].args == ["basic-memory", "mcp"]' "$ROOT/alice/.claude/.claude.json"
+check "plugin writes to personal at user level" jq -e '.basicMemory.primaryProject == "personal"' "$ROOT/alice/.claude/settings.json"
+
 vl alice vault join "$R/acme-founders.git" >/dev/null
 vl alice vault join "$R/acme-everyone.git" >/dev/null
 vl alice sync >/dev/null
@@ -56,37 +77,55 @@ APP="$(cd "$ROOT/alice" && mkdir -p work/app && cd work/app && git init -q && pw
 vl alice folder set "$LEGAL" --writes acme-founders --reads acme-everyone >/dev/null
 vl alice folder set "$APP" --writes acme-everyone >/dev/null
 
-check "personal vault is available everywhere" test "$(user_servers alice)" = "vl-personal"
-check "legal folder: founders + everyone servers" test "$(servers alice "$LEGAL")" = "vl-acme-everyone,vl-acme-founders"
-check "app folder: everyone server only" test "$(servers alice "$APP")" = "vl-acme-everyone"
-check "legal folder blocks personal" jq -e '.permissions.deny == ["mcp__vl-personal"]' "$LEGAL/.claude/settings.local.json"
-check "legal folder asks before writing everyone" jq -e '.permissions.ask | index("mcp__vl-acme-everyone__write_note")' "$LEGAL/.claude/settings.local.json"
-check "legal folder writes to acme-founders" jq -e '.basicMemory.primaryProject == "acme-founders"' "$LEGAL/.claude/settings.local.json"
-check "admin tools denied at user level" jq -e '.permissions.deny | index("mcp__vl-acme-founders__delete_project")' "$ROOT/alice/.claude/settings.json"
+check "legal folder's plugin block writes to acme-founders" jq -e '.basicMemory.primaryProject == "acme-founders"' "$LEGAL/.claude/settings.local.json"
+check "  ...with checkpoints kept local" jq -e '.basicMemory.captureFolder == "sessions" and .basicMemory.captureEvents == false' "$LEGAL/.claude/settings.local.json"
 check "settings.local.json kept out of git" test -z "$(git -C "$LEGAL" status --porcelain)"
+check "no per-folder servers any more" test -z "$(folder_servers alice "$LEGAL")"
+check "runtime.json has the folders" jq -e --arg l "$LEGAL" '.folders[$l] == {"writes": "acme-founders", "reads": ["acme-everyone"]}' <(runtime alice)
+check "runtime.json has who can see each vault" jq -e '.vaults["acme-founders"].audience.logins == ["alice", "carol"] and .me == "alice"' <(runtime alice)
+check "runtime.json maps Basic Memory projects to vaults" jq -e '.basic_memory.projects["acme-everyone"] == "acme-everyone"' <(runtime alice)
 
-BEFORE="$(jq -S '{m: .mcpServers, p: (.projects | map_values(.mcpServers))}' "$ROOT/alice/.claude/.claude.json")"
+snapshot() { jq -S '{m: .mcpServers, p: (.projects // {} | map_values(.mcpServers))}' "$ROOT/alice/.claude/.claude.json"; cat "$ROOT/alice/.claude/settings.json" "$LEGAL/.claude/settings.local.json"; }
+BEFORE="$(snapshot)"
 vl alice apply >/dev/null
-AFTER="$(jq -S '{m: .mcpServers, p: (.projects | map_values(.mcpServers))}' "$ROOT/alice/.claude/.claude.json")"
-check "apply twice changes nothing" test "$BEFORE" = "$AFTER"
+check "apply twice changes nothing" test "$BEFORE" = "$(snapshot)"
 
-echo "== the audience check refuses unsafe folders"
-OUT="$(vl alice folder set "$APP" --writes acme-everyone --reads acme-founders 2>&1 || true)"
-check "folder set refuses reading founders from everyone" grep -q "bob can see acme-everyone but not acme-founders" <<<"$OUT"
-check "  ...and changes nothing" test "$(servers alice "$APP")" = "vl-acme-everyone"
-OUT="$(vl alice folder set "$APP" --writes acme-everyone --reads personal 2>&1 || true)"
-check "folder set refuses reading a local vault from a shared one" grep -q "bob and carol can see acme-everyone but not personal" <<<"$OUT"
+echo "== the hook guards what the session reads and writes"
+FOUNDERS="$ROOT/alice/Vaults/acme-founders"
+EVERYONE="$ROOT/alice/Vaults/acme-everyone"
+check "session start tells Claude where to save" grep -q 'save notes from this folder to the `acme-founders` vault' \
+  <<<"$(hook alice "$LEGAL" '{"hook_event_name": "SessionStart", "source": "startup"}')"
+check "writing founders after reading everyone is allowed" test "$(hook alice "$LEGAL" "$(read_event "$EVERYONE/a.md")"; hook alice "$LEGAL" "$(write_event "$FOUNDERS/b.md")")" = "$(printf 'allow\nallow')"
+check "writing everyone (a read vault) asks" test "$(hook alice "$LEGAL" "$(write_event "$EVERYONE/b.md")")" = "ask"
+check "the app folder can't use acme-founders" test "$(hook alice "$APP" "$(read_event "$FOUNDERS/b.md" | jq -c '. + {session_id: "app"}')")" = "deny"
+check "Basic Memory calls get the folder's vault" \
+  grep -q '"project": "acme-everyone"' <<<"$(jq -nc --arg cwd "$APP" '{hook_event_name: "PreToolUse", session_id: "bm", cwd: $cwd, tool_name: "mcp__basic-memory__search_notes", tool_input: {query: "x"}}' | CLAUDE_PROJECT_DIR="$APP" vl alice hook)"
+check "vl sessions shows the session's label" grep -q "acme-everyone" <<<"$(vl alice sessions)"
 
-CONFIG="$ROOT/alice/.config/vaultlines/config.toml"
-perl -0pi -e 's/(\[folders\."~\/work\/app"\]\nwrites = "acme-everyone"\nreads = )\[\]/$1\["acme-founders"\]/' "$CONFIG"
-check "(config edited by hand)" grep -q 'reads = \[ *"acme-founders" *\]' "$CONFIG"
-refuses "apply exits with an error" vl alice apply
-check "the refused folder isn't set up, so it falls back to \"*\"" test -z "$(servers alice "$APP")"
-check "  ...other folders are still set up" test "$(servers alice "$LEGAL")" = "vl-acme-everyone,vl-acme-founders"
-refuses "check exits with an error" vl alice check
-check "status shows the refusal" grep -q "REFUSED" <<<"$(vl alice status)"
+echo "== reads that would leak ask, and check says where"
+vl alice folder set "$APP" --writes acme-everyone --reads acme-founders >/dev/null
+check "folder set no longer refuses; check previews the ask" \
+  grep -q "writes to acme-everyone ask after reading acme-founders (bob can't see acme-founders)" <<<"$(vl alice check)"
+hook alice "$APP" '{"hook_event_name": "SessionStart", "source": "startup", "session_id": "leak"}' >/dev/null
+hook alice "$APP" "$(read_event "$FOUNDERS/b.md" | jq -c '. + {session_id: "leak"}')" >/dev/null
+check "reading founders then writing everyone asks" test "$(hook alice "$APP" "$(write_event "$EVERYONE/c.md" | jq -c '. + {session_id: "leak"}')")" = "ask"
+mkdir -p "$APP/.claude" && echo '{"disableAllHooks": true}' > "$APP/.claude/settings.json"
+check "check warns about disableAllHooks" grep -q "sets disableAllHooks" <<<"$(vl alice check 2>&1)"
+check "status warns too" grep -q "sets disableAllHooks" <<<"$(vl alice status 2>&1)"
+rm "$APP/.claude/settings.json"
 vl alice folder set "$APP" --writes acme-everyone >/dev/null
-check "fixing the folder sets it up again" test "$(servers alice "$APP")" = "vl-acme-everyone"
+refuses '"*" is gone' vl alice folder set "*" --writes personal
+
+echo "== vaultlines 0.2 leftovers are removed"
+as alice claude mcp add -s user vl-personal -- uvx basic-memory mcp --project personal >/dev/null
+(cd "$LEGAL" && as alice claude mcp add -s local vl-acme-founders -- uvx basic-memory mcp --project acme-founders >/dev/null)
+jq '.permissions = {ask: ["mcp__vl-acme-everyone__write_note"], deny: ["mcp__vl-personal", "Bash(rm:*)"]} | .basicMemory.secondaryProjects = ["acme-everyone"]' \
+  "$LEGAL/.claude/settings.local.json" > "$LEGAL/tmp.json" && mv "$LEGAL/tmp.json" "$LEGAL/.claude/settings.local.json"
+vl alice apply >/dev/null
+check "vl-* user servers removed" test "$(user_servers alice)" = "basic-memory"
+check "vl-* folder servers removed" test -z "$(folder_servers alice "$LEGAL")"
+check "mcp__vl-* rules removed, others kept" jq -e '.permissions == {deny: ["Bash(rm:*)"]}' "$LEGAL/.claude/settings.local.json"
+check "old secondaryProjects replaced" jq -e '.basicMemory.secondaryProjects == null' "$LEGAL/.claude/settings.local.json"
 
 echo "== bob: joins the everyone vault; notes flow both ways"
 vl bob init --local >/dev/null
@@ -117,38 +156,50 @@ check "config has auto_pull" grep -q "auto_pull = true" "$CONFIG"
 (cd "$SEED" && echo "skill" > skill.md && git add -A && git -c user.name=t -c user.email=t@t commit -qm two && git push -q origin HEAD:main)
 vl alice sync >/dev/null
 check "sync pulled the new commit" test -f "$WS/skill.md"
+check "  ...and the plugin block stays out of that repo's git" test -z "$(git -C "$WS" status --porcelain)"
 mkdir -p "$ROOT/alice/plain"
 refuses "auto_pull needs a git repo" vl alice folder set "$ROOT/alice/plain" --writes personal --auto-pull
-refuses 'auto_pull not allowed on "*"' vl alice folder set "*" --writes personal --auto-pull
 
 echo "== a change on GitHub is caught by the daily check"
 AUDIENCES="$(jq -c --arg r "$R" '.[$r + "/acme-founders.git"] += ["dan"]' <<<"$AUDIENCES")"
 STATE="$ROOT/alice/.config/vaultlines/state.json"
-OUT="$(vl alice sync --background 2>&1)"
-check "no re-check within a day" test -z "$(grep 'check:' <<<"$OUT" || true)"
-check "  ...so the legal folder is still set up" test "$(servers alice "$LEGAL")" = "vl-acme-everyone,vl-acme-founders"
+vl alice sync --background >/dev/null 2>&1
+check "no re-check within check_interval" jq -e '.vaults["acme-founders"].audience.logins | index("dan") | not' <(runtime alice)
 jq '.checked_at = 0' "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"   # a day passes
+mkdir -p "$APP/.claude" && echo '{"disableAllHooks": true}' > "$APP/.claude/settings.local.json"
 OUT="$(vl alice sync --background 2>&1)"
-check "the daily check reports the new problem" grep -q "check: ~/work/legal can't read acme-everyone and write acme-founders: dan can see acme-founders but not acme-everyone" <<<"$OUT"
-check "  ...and takes the folder down" test -z "$(servers alice "$LEGAL")"
-check "  ...and remembers it, so it notifies only once" jq -e '.refused | length == 1' "$STATE"
+check "the daily check updates who can see each vault" jq -e '.vaults["acme-founders"].audience.logins | index("dan")' <(runtime alice)
+check "  ...and reports new disableAllHooks files" grep -q "check: .*sets disableAllHooks" <<<"$OUT"
 jq '.checked_at = 0' "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
 OUT="$(vl alice sync --background 2>&1)"
-check "the next daily check doesn't report it again" test -z "$(grep 'check:' <<<"$OUT" || true)"
-AUDIENCES="$(jq -c --arg r "$R" '.[$r + "/acme-everyone.git"] += ["dan"]' <<<"$AUDIENCES")"
-vl alice apply >/dev/null
-check "once dan can see both, apply sets it up again" test "$(servers alice "$LEGAL")" = "vl-acme-everyone,vl-acme-founders"
+check "  ...only once" test -z "$(grep 'check:' <<<"$OUT" || true)"
+rm "$APP/.claude/settings.local.json"
+hook alice "$LEGAL" '{"hook_event_name": "SessionStart", "source": "startup", "session_id": "dan"}' >/dev/null
+hook alice "$LEGAL" "$(read_event "$EVERYONE/a.md" | jq -c '. + {session_id: "dan"}')" >/dev/null
+OUT="$(write_event "$FOUNDERS/c.md" | jq -c --arg cwd "$LEGAL" '. + {session_id: "dan", cwd: $cwd}' | CLAUDE_PROJECT_DIR="$LEGAL" vl alice hook)"
+check "now writing founders after reading everyone asks" jq -e '.hookSpecificOutput.permissionDecision == "ask"' <<<"$OUT"
+check "  ...naming dan" jq -e '.hookSpecificOutput.permissionDecisionReason | contains("dan would see this in acme-founders")' <<<"$OUT"
 
-echo "== adopt, unset, remove"
+echo "== old sessions are cleaned up"
+SESSIONS="$ROOT/alice/.local/state/vaultlines/sessions"
+touch -t 202001010000 "$SESSIONS/e2e-session.json"
+vl alice sync >/dev/null
+check "sync deletes session files older than 30 days" test ! -e "$SESSIONS/e2e-session.json"
+check "  ...and keeps new ones" test -e "$SESSIONS/leak.json"
+
+echo "== adopt, unset, remove, uninstall"
 mkdir -p "$ROOT/alice/old-notes" && echo "# Old" > "$ROOT/alice/old-notes/old.md"
 vl alice vault adopt "$ROOT/alice/old-notes" >/dev/null
 check "adopted folder became a git repo" test -d "$ROOT/alice/old-notes/.git"
 vl alice folder unset "$APP" >/dev/null
-check "unset removed the folder's servers" test -z "$(servers alice "$APP")"
-check "unset removed the folder's vault settings" jq -e '.basicMemory == null' "$APP/.claude/settings.local.json"
+check "unset removed the folder's plugin block" jq -e '.basicMemory == null' "$APP/.claude/settings.local.json"
+check "  ...and its runtime entry" jq -e --arg a "$APP" '.folders[$a] == null' <(runtime alice)
 refuses "can't remove a vault a folder still uses" vl alice vault remove acme-founders
 vl bob vault remove acme-everyone >/dev/null
 check "remove kept the files" test -f "$ROOT/bob/Vaults/acme-everyone/notes/From bob.md"
 check "doctor passes for alice" vl alice doctor
+vl alice uninstall >/dev/null
+check "uninstall removed the hooks" jq -e '.hooks == null' "$ROOT/alice/.claude/settings.json"
+refuses "  ...so doctor fails" vl alice doctor
 
 echo "All end-to-end checks passed."

@@ -1,34 +1,44 @@
 # vaultlines
 
-**Personal and team memory vaults for Claude Code. Each folder declares what it
-writes and reads, and GitHub's real access lists keep notes from leaking.**
+**Personal and team memory vaults for Claude Code. Git syncs them, GitHub says who
+can see each one, and a Claude Code hook stops a session from copying notes to
+people who couldn't see them.**
 
 `vl` gives Claude Code a long-term memory made of plain markdown files, split into
 **vaults**: one for you, and others you share with teams, clients or friends. Each
-folder you work in says which vault it **writes** to and which vaults it **reads**.
-Before setting a folder up, `vl` asks GitHub who can see each vault. It refuses any
-folder where Claude could copy notes to people who couldn't see them before.
+folder you work in says which vault Claude **writes** to and which others it may
+**read**. While Claude works, `vl` remembers which vaults the session has read. If a
+write would show those notes to someone new, `vl` asks you first.
 
-Under the hood it wires together three tools you may already use:
+`vl` is three things:
 
-- [Basic Memory](https://github.com/basicmachines-co/basic-memory) stores the notes
-  and gives Claude fast, offline search over them.
-- [Claude Code](https://claude.com/claude-code) settings and permission rules
-  decide which vaults each folder can use.
+- **A CLI** that creates, joins and syncs vaults, and says which folders use which.
+- **A background sync** (git: commit, pull, push) every 10 minutes.
+- **A Claude Code hook** that checks every tool call that touches a vault.
+
+It works with the tools you may already use:
+
+- [Basic Memory](https://github.com/basicmachines-co/basic-memory) gives Claude
+  fast, offline search over the notes. `vl` sets it up and knows how its tools
+  choose a vault.
 - **git and GitHub** sync each vault, and GitHub's access lists say who can see it.
+- Vaults are ordinary folders, so you can also open them in
+  [Obsidian](https://obsidian.md).
 
-Vaults are ordinary folders, so you can also open them in
-[Obsidian](https://obsidian.md).
+Anything may write files into a vault: you, Obsidian, a script, an import job. `vl`
+only guards what Claude does.
 
 ## An example
 
-Sam co-founded Acme, does client work for Globex, and has a side project.
+Sam co-founded Acme, and has a side project.
 
 ```toml
 # ~/.config/vaultlines/config.toml
 
 [settings]
-sync_interval = 600
+sync_interval  = 600      # sync vaults with GitHub every 10 minutes
+check_interval = 86400    # ask GitHub once a day who can see each vault
+on_leak        = "ask"    # a write that shows notes to new people: "ask" you, or "block" it
 
 # ---------------------------------------------------------------- vaults
 # Remotes are GitHub repos. A vault with no remote stays on this computer.
@@ -48,34 +58,26 @@ remote = "https://github.com/acme/acme-founders.git"
 path   = "~/Vaults/acme-everyone"
 remote = "https://github.com/acme/acme-everyone.git"
 
-[vaults.globex]
-path   = "~/Vaults/globex"
-remote = "https://github.com/globex/shared-notes.git"
-
 # ---------------------------------------------------------------- folders
-# Each folder writes to one vault and reads a list of others.
-# Writing to a vault in `reads` asks first.
+# Which vaults Claude uses in each folder. Subfolders use the closest listed parent.
 
-[folders."*"]                                # every folder not listed below
+[folders."~"]                                # everything in your home folder
 writes = "personal"
-reads  = []
 
-[folders."~/notes"]                          # a journal that can look up Acme info
-writes = "personal"
-reads  = ["acme-everyone"]
-
-[folders."~/code/acme-legal"]                # founder work
+[folders."~/code/acme"]                      # every Acme repo
 writes = "acme-founders"
 reads  = ["acme-everyone"]
 
-[folders."~/code/acme-app"]                  # everyday Acme work
+[folders."~/code/acme/app"]                  # everyday Acme work
 writes    = "acme-everyone"
-reads     = []
 auto_pull = true                             # keep this repo pulled
 
-[folders."~/code/side-project"]              # a project only Sam sees
+[folders."~/code/side-project"]
 writes = "side-project"
-reads  = ["acme-everyone", "personal"]
+reads  = ["personal"]
+
+# ---------------------------------------------------------------- adapters
+[adapters.basic-memory]                      # present = on
 ```
 
 GitHub says who can see each vault:
@@ -86,61 +88,69 @@ GitHub says who can see each vault:
 | `side-project` | sam (no remote) |
 | `acme-founders` | sam, lee |
 | `acme-everyone` | sam, lee, ana, raj |
-| `globex` | sam, globex-dev1, globex-dev2 |
 
-So every folder above passes:
+What happens:
 
-| Folder | Why it's allowed |
-|---|---|
-| everywhere else (`"*"`) | Writes to `personal` and reads nothing else. |
-| `~/notes` | Only sam sees `personal`, and sam can see `acme-everyone`. |
-| `~/code/acme-legal` | Everyone who sees `acme-founders` (sam, lee) can see `acme-everyone`. |
-| `~/code/acme-app` | Reads nothing else. |
-| `~/code/side-project` | Only sam sees `side-project`, and sam can see everything it reads. |
+| Folder | Claude does | Result | Why |
+|---|---|---|---|
+| `~/code/blog` | reads `acme-founders` | ❌ blocked | `"~"` applies there, and it doesn't use Acme vaults |
+| `~/code/acme/api` | starts a session | saves to `acme-founders`, may read `acme-everyone` | it uses its parent `~/code/acme` |
+| `~/code/acme` | reads `acme-everyone`, then writes `acme-founders` | ✅ allowed | everyone who sees `acme-founders` can see `acme-everyone` |
+| `~/code/acme/app` | reads `acme-founders`… | ❌ blocked | `app` doesn't list `acme-founders` |
+| `~/code/acme` | reads `acme-founders`, then writes `acme-everyone` | ⚠️ asks you | ana and raj would see it; `acme-everyone` is also a read vault here |
+| `~/code/side-project` | reads `personal`, then writes `side-project` | ✅ allowed | only Sam sees `side-project` |
+| anywhere | reads a web page, then writes a vault | ✅ allowed | only vault reads count (see the security model) |
 
-And these would be refused:
-
-```
-$ vl folder set ~/code/acme-app --writes acme-everyone --reads acme-founders
-error: ~/code/acme-app can't read acme-founders and write acme-everyone: ana and raj can see acme-everyone but not acme-founders.
-
-$ vl folder set ~/code/globex-api --writes globex --reads acme-everyone
-error: ~/code/globex-api can't read acme-everyone and write globex: globex-dev1 and globex-dev2 can see globex but not acme-everyone.
-
-$ vl folder set ~/code/acme-legal --writes acme-founders --reads personal
-error: ~/code/acme-legal can't read personal and write acme-founders: lee can see acme-founders but not personal.
-```
-
-Later, if Sam gives Ana access to `acme-founders`, nothing changes: Ana can
-already see `acme-everyone`. But if Sam invites a contractor to `acme-founders`
-only, the daily check notices, takes `~/code/acme-legal` down, and notifies Sam.
+Later, if Sam invites a contractor to `acme-founders` on GitHub, the daily check
+notices. From then on, writing `acme-founders` after reading `acme-everyone` asks
+first, because the contractor can't see `acme-everyone`.
 
 ## How it works
 
-### Folders declare their vaults
+### Folders choose which vaults Claude uses (focus)
 
 Each entry under `[folders]` says:
 
-- **`writes`**: the one vault this folder writes to. Claude reads and writes it freely.
-- **`reads`**: other vaults Claude can read here. Writing to them **asks you first**.
+- **`writes`**: the vault Claude saves notes to in this folder.
+- **`reads`** (optional): other vaults Claude may use here. Writing to them **always
+  asks first**, so `reads` keeps meaning "read". This also protects vaults that
+  another tool fills, like an import of Slack channels.
 - **`auto_pull`** (optional, default `false`): pull this git repo on every sync.
 
-Every other vault is off limits in that folder. Its tools aren't loaded, and the
-`"*"` vaults are blocked with deny rules.
+A folder uses the **closest listed parent**. List `"~"` to cover everything in your
+home folder, then list only the exceptions. A folder with no listed parent gets no
+vaults at all.
 
-`"*"` covers every folder you haven't listed. Its vaults are set up at the user
-level, so they're available everywhere except in listed folders that don't use them.
+**Every other vault doesn't exist for the session.** Claude is only told about this
+folder's vaults, and a call to any other vault is blocked with "`X` is not used in
+this folder". So a session in `~/code/blog` never fills its context with Acme notes.
 
-The approvals are Claude Code **ask rules**, and the blocks are **deny rules**. Both
-still apply in bypass-permissions mode.
+### The session label keeps notes from leaking (safety)
 
-### The audience check
+`vl` remembers, per Claude session, **who can see everything the session has read**:
 
-**Rule: everyone who can see the vault a folder writes to must be able to see every
-vault it reads.** Otherwise Claude could copy notes from a read vault into the write
-vault, where new people would see them.
+1. The label starts as *everyone*.
+2. Each vault read narrows it to the people who can see that vault.
+3. Before a write to vault V, `vl` finds the people who can see V but aren't in the
+   label. If there are any, it asks you (or blocks, with `on_leak = "block"`):
 
-Who can see a vault comes from GitHub:
+   ```
+   vl: This session read acme-founders. ana and raj would all see this in acme-everyone.
+   ```
+
+Details:
+
+- A vault whose audience is unknown counts as *only you* when read.
+- Reads are recorded before the call runs, even if the call then fails.
+- Subagents share their session's label.
+- `--resume` and compaction keep the label. A forked session (`--fork-session`), or a
+  session `vl` has no record of, starts as *only you*: its context may hold anything.
+- `/clear` starts a new session with a fresh label.
+- In `claude -p`, "ask" means the call is blocked, because nobody is there to answer.
+
+`vl sessions` shows recent sessions, their folder, their label and what they read.
+
+### Who can see a vault
 
 | Vault | Who can see it |
 |---|---|
@@ -149,24 +159,7 @@ Who can see a vault comes from GitHub:
 | Private repo you can push to | Its collaborators, from GitHub's API. This includes people who get access through the org's base permission, teams, and org owners. |
 | Private repo you can only read | Unknown. GitHub won't list collaborators to read-only users. |
 
-A folder passes when:
-
-- its write vault is **only yours** (you can already see everything you read), or
-- each vault it reads is **public**, or
-- everyone who can see the write vault can also see each read vault.
-
-Anything unknown is **refused**, never guessed. The error names the people who could
-see the write vault but not the read vault.
-
-- `vl folder set` refuses and changes nothing.
-- `vl apply` sets up every folder that passes and skips the rest, so they use `"*"`
-  instead. It prints the errors and exits with an error. If `"*"` itself fails, it
-  gets only its write vault.
-- **Once a day**, background sync asks GitHub again and re-applies. If a folder stops
-  passing, it's taken down and you get a notification. If GitHub can't be reached,
-  `vl` uses the last answer it got and tries again at the next sync.
-
-`vl check` shows the whole picture:
+`vl check` asks GitHub and shows where writes will ask:
 
 ```
 $ vl check
@@ -174,32 +167,61 @@ Who can see each vault
   vault          who can see it
   acme-everyone  ana, lee, raj, sam
   acme-founders  lee, sam
-  globex         globex-dev1, globex-dev2, sam
   personal       sam
   side-project   only you (no remote)
 
-Folders
-  folder               writes         reads                    auto_pull  check
-  "*"                  personal       -                                   ok
-  ~/code/acme-app      acme-everyone  -                        yes        ok
-  ~/code/acme-legal    acme-founders  acme-everyone                       ok
-  ~/code/side-project  side-project   acme-everyone, personal             ok
-  ~/notes              personal       acme-everyone                       ok
+Where writes will ask
+  ~:                    never
+  ~/code/acme:          writes to acme-everyone always ask (it's in reads)
+  ~/code/acme/app:      never
+  ~/code/side-project:  writes to personal always ask (it's in reads)
 ```
 
-### What Claude does on its own
+**Once a day**, background sync asks GitHub again and updates what the hook uses. If
+GitHub can't be reached, `vl` keeps the last answer and tries again at the next sync.
+
+### How the hook sees which vault a call uses
+
+The hook is `vl hook`, installed in `~/.claude/settings.json` for `SessionStart` and
+for these tools only: `Read`, `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `Grep`,
+`Glob`, `Bash` and Basic Memory's. It reads a small file that `vl` writes
+(`~/.local/state/vaultlines/runtime.json`), never the config or GitHub, and adds about
+50 ms to each of those calls.
+
+- **File tools:** the path in the call (with `~`, relative paths and symlinks
+  resolved). `Read`, `Grep` and `Glob` are reads; the others are writes. A `Grep` or
+  `Glob` over a folder that holds several vaults reads each of them, and is blocked if
+  any is outside this folder's vaults ("search a narrower folder").
+- **Bash:** a vault path in the command (absolute, `~/…`, `$HOME/…`, or relative to
+  the current folder) counts as a read **and** a write of that vault. This is best
+  effort: a command can always build a path the scan can't see.
+- **Basic Memory:** there is one Basic Memory server for all vaults, and each vault is
+  a project with the vault's name. The `project` argument names the vault. If it's
+  missing, `vl` fills in the folder's `writes` vault. A `memory://` link whose first
+  part is another project counts too. `vl` blocks what it can't check: `project_id`,
+  `workspace`, `search_all_projects`, `recent_activity` without a project, the
+  `search` and `fetch` tools, project management, and any argument it doesn't know.
+- **Session start:** Claude gets one line saying where to save notes and what else it
+  may read.
+
+If the hook itself fails, calls that may touch a vault are blocked with
+"vl hook error: run `vl doctor`". Other calls are never blocked.
+
+### What the Basic Memory plugin does on its own
 
 The [Basic Memory plugin](https://github.com/basicmachines-co/basic-memory/tree/main/plugins/claude-code)
-(installed by `vl init`) does two things automatically:
+(installed by `vl init`) does two things by itself, outside Claude's tool calls:
 
-- **At the start of each session,** it loads a short briefing from the folder's
-  write vault.
+- **At the start of each session,** it loads a short briefing from a vault.
 - **Before Claude compacts a long conversation,** it saves a checkpoint note in that
   vault's `sessions/` folder.
 
-`sessions/` is never synced. Checkpoints stay on the computer that wrote them, so
-nothing lands in a shared vault by accident. Anything else Claude saves, you asked for,
-or your instructions told it to save.
+`vl` points it at each listed folder's `writes` vault, and counts the briefing as a
+read of that vault. The plugin uses the nearest `.claude/settings*.json`, so in a
+subfolder that has its own settings file it falls back to your user-level vault; the
+hook counts whichever vault the plugin actually uses.
+
+`sessions/` is never synced. Checkpoints stay on the computer that wrote them.
 
 ### Sync
 
@@ -210,6 +232,8 @@ never stops on a conflict. If sync fails anyway, you get a notification.
 
 Folders with `auto_pull = true` are pulled too, fast-forward only. `vl` never pushes
 them. If the pull can't fast-forward, it's skipped and noted in the log.
+
+Sync also deletes session records older than 30 days.
 
 ## Install
 
@@ -224,18 +248,18 @@ vl init
 
 `vl init` does the following:
 
-1. Sets Basic Memory so it doesn't rewrite notes that other people also edit.
-2. Installs the Basic Memory plugin for Claude Code.
-3. Creates your personal vault at `~/Vaults/personal`, backed by a new private GitHub
+1. Sets up Basic Memory (so it doesn't rewrite notes other people also edit), its one
+   server, and its Claude Code plugin. Use `--no-basic-memory` to skip this.
+2. Creates your personal vault at `~/Vaults/personal`, backed by a new private GitHub
    repo, `vault-personal`. Use `--local` to keep it on this computer only (then you
    don't need `gh`).
-4. Adds `"*"`, writing to `personal`.
-5. Starts background sync.
+3. Lists `"~"`, writing to `personal`.
+4. Installs the Claude Code hooks and starts background sync.
 
 ## Quick start
 
 **On your own:** after `vl init` you're done. Claude has a personal memory in every
-folder.
+folder in your home folder.
 
 **Start a team** (for example as a founder):
 
@@ -243,8 +267,8 @@ folder.
 vl vault create acme-everyone --github acme/acme-everyone
 vl vault create acme-founders --github acme/acme-founders
 
-vl folder set ~/code/acme-legal --writes acme-founders --reads acme-everyone
-vl folder set ~/code/acme-app   --writes acme-everyone
+vl folder set ~/code/acme     --writes acme-founders --reads acme-everyone
+vl folder set ~/code/acme/app --writes acme-everyone
 ```
 
 Then give the team access to `acme/acme-everyone` on GitHub, and give only the
@@ -255,7 +279,7 @@ founders access to `acme/acme-founders`.
 ```bash
 vl init
 vl vault join https://github.com/acme/acme-everyone.git
-vl folder set ~/code/acme-app --writes acme-everyone
+vl folder set ~/code/acme/app --writes acme-everyone
 ```
 
 **Move existing notes in:** `vl vault adopt ~/Notes` takes over a folder you already
@@ -266,40 +290,40 @@ create a private GitHub repo for it.
 
 | Command | What it does |
 |---|---|
-| `vl init [--local]` | Set up this computer. Safe to run again. |
+| `vl init [--local] [--no-basic-memory]` | Set up this computer. Safe to run again. |
 | `vl vault create NAME [--github OWNER/REPO \| --local]` | New vault. By default this creates a private GitHub repo `YOU/vault-NAME`. |
 | `vl vault join URL [--name NAME]` | Clone a vault from GitHub. |
 | `vl vault adopt PATH [--github OWNER/REPO]` | Manage a folder that already has notes. |
 | `vl vault remove NAME [--delete-files]` | Stop managing a vault. Its files stay unless you pass `--delete-files`. Folders must stop using it first. |
-| `vl folder set PATH --writes V [--reads A,B] [--auto-pull]` | Set a folder's vaults. `PATH` can be `"*"` (quote it). Replaces the folder's entry. |
-| `vl folder unset PATH` | Remove a folder's entry, so it uses `"*"`. |
-| `vl check` | Ask GitHub who can see each vault, and check every folder. |
+| `vl folder set PATH --writes V [--reads A,B] [--auto-pull]` | Set a folder's vaults. It covers subfolders too. Replaces the folder's entry. |
+| `vl folder unset PATH` | Remove a folder's entry, so it uses its closest listed parent. |
+| `vl check` | Ask GitHub who can see each vault, and show where writes will ask. |
 | `vl sync [VAULT]` | Sync now. |
-| `vl status` | Vaults and who can see them, folders and their check, sync. |
-| `vl apply` | Rewrite Claude Code and Obsidian settings from the config. |
+| `vl status` | Vaults and who can see them, folders, hooks, sync. |
+| `vl sessions` | Recent Claude sessions: folder, label, vaults read. |
+| `vl apply` | Set up git, Basic Memory, the plugin, the hooks and Obsidian from the config. |
 | `vl doctor` | Check that everything is set up. |
-| `vl uninstall` | Stop background sync. Everything else stays. |
+| `vl uninstall` | Remove the hooks and stop background sync. Everything else stays. |
 
 ## The config file
 
 Everything lives in `~/.config/vaultlines/config.toml`, one per computer. You can
 edit it by hand, then run `vl apply`.
 
-- Every folder needs `writes` and `reads` (`reads` can be `[]`).
+- Every folder needs `writes`. `reads` is optional.
 - Vault names must exist, and `writes` can't also be in `reads`.
-- `auto_pull` only works on git repos, and not on `"*"`.
+- Two entries can't be the same folder. There is no `"*"`: list `"~"` instead.
 - `remote` must be `https://github.com/OWNER/REPO` (with or without `.git`). Leave
   it out for a vault that stays on this computer.
-- A vault in `"*"`'s `reads` can't be another folder's `writes`. Claude Code applies
-  user-level ask rules everywhere, so that folder would have to ask before every
-  write.
+- `on_leak` is `"ask"` (default) or `"block"`.
+- `[adapters.basic-memory]` turns the Basic Memory adapter on. It takes an optional
+  `command` (default `uvx basic-memory`).
 
 Mistakes are reported with the file and key, for example
 `~/.config/vaultlines/config.toml: folders."~/code/app".reads: no vault named 'acme'`.
 
-Optional settings: `vaults_dir` (default `~/Vaults`) and `bm_command` (default
-`uvx basic-memory`). Audiences from GitHub are cached in
-`~/.config/vaultlines/state.json`.
+Optional settings: `vaults_dir` (default `~/Vaults`). Audiences from GitHub are cached
+in `~/.config/vaultlines/state.json`.
 
 ## What `vl` changes on your computer
 
@@ -307,41 +331,50 @@ Optional settings: `vaults_dir` (default `~/Vaults`) and `bm_command` (default
 
 | Where | What |
 |---|---|
-| Claude Code MCP servers | Servers named `vl-<vault>`. The `"*"` vaults are user-level. The others are added only for the folders that use them (local scope, stored in `~/.claude.json`, never in a repo). |
-| `~/.claude/settings.json` | The `basicMemory` block, ask rules for `"*"`'s read vaults, and deny rules that stop Claude from adding or deleting Basic Memory projects. All rules start with `mcp__vl-`. |
-| `<folder>/.claude/settings.local.json` | The `basicMemory` block, and the ask and deny rules starting with `mcp__vl-`. If the folder is a git repo and the file isn't ignored yet, `vl` adds it to `.git/info/exclude`. |
-| Basic Memory | One project per vault. |
+| `~/.claude/settings.json` | Hooks whose command is `vl hook`, and the `basicMemory` block for the folder that covers your home folder. |
+| `<folder>/.claude/settings.local.json` | The `basicMemory` block. If the folder is a git repo and the file isn't ignored yet, `vl` adds it to `.git/info/exclude`. |
+| Claude Code MCP servers | One user-level server named `basic-memory`. |
+| Basic Memory | One project per vault, with the vault's name. |
+| `~/.local/state/vaultlines/` | `runtime.json` (what the hook reads) and `sessions/` (one small file per session). |
 | Each vault | A git repo with `.gitignore` (`sessions/`, `.obsidian/`) and `.gitattributes` (`*.md merge=union`). |
 | `auto_pull` folders | `git pull --ff-only` on every sync. Nothing else. |
 | Obsidian | Adds each vault to the vault switcher, only while Obsidian is closed. |
 | macOS | `~/Library/LaunchAgents/com.vaultlines.sync.plist`, logging to `~/Library/Logs/vaultlines.log`. |
 
-Your other settings, rules and servers are left alone.
+It also removes what vaultlines 0.2 added: `vl-*` servers and `mcp__vl-*` rules. Your
+other settings, hooks and servers are left alone.
 
 ## Security model
 
 - **The real boundary is which vaults exist on a computer.** Someone who never gets
   access to the `acme-founders` repo can't read it. Give GitHub access with that in
   mind.
-- **The audience check covers vaults, not repos.** In `~/code/acme-app`, Claude also
-  writes code, docs and commit messages into that repo, and it could copy a note
-  from a read vault into them. That goes through your normal diff and pull request
-  review, so review what Claude writes before it's pushed. A repo where Claude
-  pushes straight to `main` gets no review step.
-- **Folder rules prevent mistakes; they are not a sandbox.** They stop Claude from
-  using the wrong vault through its tools. They can't stop a person, or a shell
-  command, from copying files.
-- **You are still a channel.** If you tell a session in a shared folder something
-  private, Claude can write it to the shared vault.
+- **The hook only guards Claude Code.** Other AI tools (Cursor, Claude Desktop) don't
+  run it. People, scripts and Obsidian can copy files freely.
+- **Only vault reads narrow the label.** Text Claude gets from other tools (email,
+  Slack, web pages) counts as safe, so it can reach a shared vault without a question.
+  This is a known gap, by choice.
+- **Only vault writes are checked.** In a repo, Claude also writes code, docs and
+  commit messages, and it could copy a note into them. That goes through your normal
+  diff and pull request review.
+- **Bash is best effort.** A command that builds a vault path the scan can't see gets
+  through.
+- **A repo can switch hooks off.** A `.claude/settings.json` with
+  `"disableAllHooks": true` turns off every hook, `vl`'s included. `vl` can't prevent
+  this. `vl check`, `vl status`, `vl doctor` and the daily check look for it in your
+  listed folders (up to their git repo root) and warn you. Folders you never listed
+  aren't checked.
+- **You are still a channel.** If you tell a session something private, the label
+  doesn't know, and Claude can write it to a shared vault.
 - **GitHub's list is the whole list, with limits.** Collaborators include org base
   permissions, teams and owners. Deploy keys and GitHub Apps with access to a repo
   aren't people and aren't listed. Invitations count once they're accepted, at the
   next daily check.
-- **Read-only vaults can block shared writers.** If you can only read a private vault,
-  GitHub won't say who else can see it. A folder that writes to a shared vault can't
-  read it. A folder that writes only to your own vaults can.
 - **`vl` checks that each vault's git remote matches the config.** If they don't
-  match, the vault's audience is unknown, so folders that depend on it are refused.
+  match, the vault's audience is unknown, so reading it counts as *only you*.
+- **Basic Memory projects `vl` doesn't know are blocked**, and so are new ways to pick
+  a project until the adapter learns them. A project added by hand after the last
+  `vl apply` isn't known to the hook until the next one.
 - **GitHub stores your notes.** It holds a copy, even of private repos. For notes that
   should never leave your computer, leave out `remote`.
 - **Leaving a team doesn't delete notes.** When someone leaves, remove their repo
@@ -376,7 +409,7 @@ a cron entry instead, for example `*/10 * * * * vl sync --background`.
 ## Development
 
 ```bash
-uv run --group dev pytest       # unit tests
+uv run --group dev pytest       # unit tests, plus `vl hook` run on recorded events
 tests/e2e.sh                    # end-to-end: two fake computers, local git remotes
 ```
 

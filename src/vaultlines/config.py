@@ -11,14 +11,16 @@ from pathlib import Path
 import tomli_w
 
 from .gitsync import check_remote
-from .util import VlError, contract, expand, home
+from .util import VlError, closest_parent, contract, expand, home
 
-STAR = "*"  # the folder entry for every folder that isn't listed
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
-SETTINGS_KEYS = {"vaults_dir", "sync_interval", "bm_command"}
+SETTINGS_KEYS = {"vaults_dir", "sync_interval", "check_interval", "on_leak"}
 VAULT_KEYS = {"path", "remote"}
 FOLDER_KEYS = {"writes", "reads", "auto_pull"}
-DEFAULTS = {"vaults_dir": "~/Vaults", "sync_interval": 600, "bm_command": "uvx basic-memory"}
+ADAPTERS = {"basic-memory": {"command"}}  # built-in adapters and their keys
+ON_LEAK = ("ask", "block")
+DEFAULTS = {"vaults_dir": "~/Vaults", "sync_interval": 600, "check_interval": 86400, "on_leak": "ask"}
+BM_COMMAND = "uvx basic-memory"
 
 
 def config_dir() -> Path:
@@ -39,19 +41,25 @@ class Vault:
 
 @dataclass
 class Folder:
-    path: str  # an absolute path, or "*"
+    path: str  # an absolute path
     writes: str
     reads: list[str] = field(default_factory=list)
     auto_pull: bool = False
+
+    @property
+    def vaults(self) -> list[str]:
+        return [self.writes, *self.reads]
 
 
 @dataclass
 class Config:
     vaults_dir: Path = field(default_factory=lambda: expand(DEFAULTS["vaults_dir"]))
     sync_interval: int = DEFAULTS["sync_interval"]
-    bm_command: str = DEFAULTS["bm_command"]
+    check_interval: int = DEFAULTS["check_interval"]
+    on_leak: str = DEFAULTS["on_leak"]
     vaults: dict[str, Vault] = field(default_factory=dict)
-    folders: dict[str, Folder] = field(default_factory=dict)  # folder path (or "*") -> entry
+    folders: dict[str, Folder] = field(default_factory=dict)  # folder path -> entry
+    adapters: dict[str, dict] = field(default_factory=dict)  # adapter name -> its settings
 
     def vault(self, name: str) -> Vault:
         if name not in self.vaults:
@@ -59,25 +67,34 @@ class Config:
             raise VlError(f"No vault named '{name}'. Known vaults: {known}")
         return self.vaults[name]
 
-    @property
-    def star(self) -> Folder | None:
-        return self.folders.get(STAR)
-
     def listed(self) -> list[Folder]:
-        """Every folder entry except "*"."""
-        return [f for p, f in sorted(self.folders.items()) if p != STAR]
+        return [self.folders[p] for p in sorted(self.folders)]
 
     def users(self, vault: str) -> list[str]:
         """Folders that write or read a vault."""
-        return [p for p, f in self.folders.items() if vault == f.writes or vault in f.reads]
+        return [p for p, f in self.folders.items() if vault in f.vaults]
+
+    @property
+    def basic_memory(self) -> bool:
+        return "basic-memory" in self.adapters
+
+    @property
+    def bm_command(self) -> str:
+        return self.adapters.get("basic-memory", {}).get("command", BM_COMMAND)
+
+
+def folder_for(cfg: Config, cwd: str | Path) -> Folder | None:
+    """The entry for a folder: the closest listed parent, or None."""
+    key = closest_parent(cfg.folders, str(expand(cwd)))
+    return cfg.folders[key] if key else None
 
 
 def folder_key(text: str) -> str:
-    return STAR if text == STAR else str(expand(text))
+    return str(expand(text))
 
 
 def show(folder: str) -> str:
-    return '"*"' if folder == STAR else contract(folder)
+    return contract(folder)
 
 
 def _err(key: str, message: str) -> VlError:
@@ -97,6 +114,12 @@ def _table(value, key: str) -> dict:
     return value
 
 
+def _int(value, key: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise _err(key, "should be a whole number of seconds")
+    return value
+
+
 def load() -> Config:
     path = config_path()
     if not path.exists():
@@ -105,14 +128,15 @@ def load() -> Config:
         data = tomllib.loads(path.read_text())
     except tomllib.TOMLDecodeError as e:
         raise VlError(f"{contract(path)}: {e}") from None
-    _no_unknown_keys(data, {"settings", "vaults", "folders"}, "")
+    _no_unknown_keys(data, {"settings", "vaults", "folders", "adapters"}, "")
 
     s = _table(data.get("settings", {}), "settings")
     _no_unknown_keys(s, SETTINGS_KEYS, "settings")
     cfg = Config(
         vaults_dir=expand(s.get("vaults_dir", DEFAULTS["vaults_dir"])),
-        sync_interval=int(s.get("sync_interval", DEFAULTS["sync_interval"])),
-        bm_command=s.get("bm_command", DEFAULTS["bm_command"]),
+        sync_interval=_int(s.get("sync_interval", DEFAULTS["sync_interval"]), "settings.sync_interval"),
+        check_interval=_int(s.get("check_interval", DEFAULTS["check_interval"]), "settings.check_interval"),
+        on_leak=s.get("on_leak", DEFAULTS["on_leak"]),
     )
 
     for name, v in _table(data.get("vaults", {}), "vaults").items():
@@ -127,20 +151,27 @@ def load() -> Config:
 
     for text, f in _table(data.get("folders", {}), "folders").items():
         key = f'folders."{text}"'
+        if text == "*":
+            raise _err(key, 'there is no "*" any more: use "~" to cover every folder in your home folder.')
         _no_unknown_keys(_table(f, key), FOLDER_KEYS, key)
-        for required in ("writes", "reads"):
-            if required not in f:
-                raise _err(f"{key}.{required}", "missing. Every folder needs `writes` and `reads` (reads can be []).")
-        if not isinstance(f["writes"], str):
-            raise _err(f"{key}.writes", "should be one vault name")
-        if not isinstance(f["reads"], list) or not all(isinstance(r, str) for r in f["reads"]):
+        if not isinstance(f.get("writes"), str):
+            raise _err(f"{key}.writes", "missing. Every folder needs the one vault it writes to.")
+        reads = f.get("reads", [])
+        if not isinstance(reads, list) or not all(isinstance(r, str) for r in reads):
             raise _err(f"{key}.reads", "should be a list of vault names")
         if not isinstance(f.get("auto_pull", False), bool):
             raise _err(f"{key}.auto_pull", "should be true or false")
-        folder = Folder(folder_key(text), f["writes"], list(dict.fromkeys(f["reads"])), f.get("auto_pull", False))
+        folder = Folder(folder_key(text), f["writes"], list(dict.fromkeys(reads)), f.get("auto_pull", False))
         if folder.path in cfg.folders:
             raise _err(key, f"the same folder as another entry ({contract(folder.path)})")
         cfg.folders[folder.path] = folder
+
+    for name, a in _table(data.get("adapters", {}), "adapters").items():
+        key = f"adapters.{name}"
+        if name not in ADAPTERS:
+            raise _err(key, f"unknown adapter. Built in: {', '.join(sorted(ADAPTERS))}")
+        _no_unknown_keys(_table(a, key), ADAPTERS[name], key)
+        cfg.adapters[name] = dict(a)
 
     validate(cfg)
     return cfg
@@ -148,6 +179,11 @@ def load() -> Config:
 
 def validate(cfg: Config) -> None:
     """Raise a VlError naming the file and key of the first problem."""
+    if cfg.on_leak not in ON_LEAK:
+        raise _err("settings.on_leak", f'should be "ask" or "block", not {cfg.on_leak!r}')
+    command = cfg.adapters.get("basic-memory", {}).get("command")
+    if command is not None and (not isinstance(command, str) or not command.strip()):
+        raise _err("adapters.basic-memory.command", 'should be a command, like "uvx basic-memory"')
     for name, v in cfg.vaults.items():
         if not NAME_RE.match(name):
             raise _err(f"vaults.{name}", "vault names use lowercase letters, digits and dashes")
@@ -157,7 +193,7 @@ def validate(cfg: Config) -> None:
             except VlError as e:
                 raise _err(f"vaults.{name}.remote", str(e)) from None
     for f in cfg.folders.values():
-        key = f"folders.{show(f.path)}"
+        key = f'folders."{show(f.path)}"'
         if f.writes not in cfg.vaults:
             raise _err(f"{key}.writes", f"no vault named '{f.writes}'")
         for r in f.reads:
@@ -165,38 +201,27 @@ def validate(cfg: Config) -> None:
                 raise _err(f"{key}.reads", f"no vault named '{r}'")
         if f.writes in f.reads:
             raise _err(f"{key}.reads", f"'{f.writes}' is the vault this folder writes to, so it can't also be in reads")
-        if f.auto_pull and f.path == STAR:
-            raise _err(f"{key}.auto_pull", 'only works on a listed folder, not "*"')
-    star = cfg.star
-    if star:
-        for f in cfg.listed():
-            if f.writes in star.reads:
-                raise _err(
-                    f"folders.{show(f.path)}.writes",
-                    f"'{f.writes}' is in folders.\"*\".reads, so writing to it asks first in every folder, "
-                    f"including this one (Claude Code applies user-level ask rules everywhere). "
-                    f"Remove '{f.writes}' from folders.\"*\".reads, or add it only to the folders that need it.",
-                )
 
 
 def save(cfg: Config) -> None:
     validate(cfg)
-    settings: dict = {"sync_interval": cfg.sync_interval}
+    settings: dict = {"sync_interval": cfg.sync_interval, "check_interval": cfg.check_interval,
+                      "on_leak": cfg.on_leak}
     if contract(cfg.vaults_dir) != DEFAULTS["vaults_dir"]:
         settings["vaults_dir"] = contract(cfg.vaults_dir)
-    if cfg.bm_command != DEFAULTS["bm_command"]:
-        settings["bm_command"] = cfg.bm_command
     vaults = {}
     for name, v in sorted(cfg.vaults.items()):
         vaults[name] = {"path": contract(v.path), **({"remote": v.remote} if v.remote else {})}
     folders = {}
-    for path in sorted(cfg.folders, key=lambda p: (p != STAR, p)):
-        f = cfg.folders[path]
-        entry: dict = {"writes": f.writes, "reads": f.reads}
+    for f in cfg.listed():
+        entry: dict = {"writes": f.writes}
+        if f.reads:
+            entry["reads"] = f.reads
         if f.auto_pull:
             entry["auto_pull"] = True
-        folders[STAR if path == STAR else contract(path)] = entry
-    data = {"settings": settings, "vaults": vaults, "folders": folders}
+        folders[contract(f.path)] = entry
+    data = {"settings": settings, "vaults": vaults, "folders": folders,
+            "adapters": {name: dict(a) for name, a in sorted(cfg.adapters.items())}}
     path = config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".vl-tmp")

@@ -1,14 +1,10 @@
-"""Who can see each vault, and the check that keeps folders from leaking notes.
-
-The rule: everyone who can see the vault a folder writes to must be able to see
-every vault the folder reads. Otherwise Claude could copy notes from a vault into
-one that more people can see.
+"""Who can see each vault. The hook's session label is built from these answers.
 
 Who can see a vault comes from GitHub:
   - no remote                -> only you
   - public repo              -> everyone
   - private repo, you push   -> its collaborators (includes org base permission, teams, owners)
-  - anything else            -> unknown, and the check refuses rather than guess
+  - anything else            -> unknown, which the label treats as "only you"
 
 Answers are cached in ~/.config/vaultlines/state.json, with the time they were checked.
 """
@@ -22,7 +18,7 @@ import time
 from dataclasses import dataclass
 
 from . import config, gitsync
-from .config import STAR, Config, show
+from .config import Config
 from .util import VlError, read_json, run, write_json
 
 DAY = 24 * 60 * 60
@@ -177,58 +173,3 @@ def audiences(cfg: Config, fresh: bool = True) -> tuple[dict[str, Audience], lis
 
 def cached_me() -> str:
     return load_state().get("me", "")
-
-
-# ---------------------------------------------------------------- the check
-
-@dataclass
-class Problem:
-    folder: str
-    writes: str
-    read: str
-    why: str
-
-    def message(self) -> str:
-        return f"{show(self.folder)} can't read {self.read} and write {self.writes}: {self.why}."
-
-
-def _names(logins: list[str]) -> str:
-    return logins[0] if len(logins) == 1 else ", ".join(logins[:-1]) + " and " + logins[-1]
-
-
-def only_you(a: Audience, login: str) -> bool:
-    if a.kind == "me":
-        return True
-    return a.kind == "people" and bool(login) and {x.lower() for x in a.logins} <= {login.lower()}
-
-
-def folder_problems(cfg: Config, folder: str, auds: dict[str, Audience], login: str) -> list[Problem]:
-    f = cfg.folders[folder]
-    w = auds[f.writes]
-    if only_you(w, login):
-        return []  # you can already see everything you read
-    problems = []
-    for name in f.reads:
-        r = auds[name]
-        if r.kind == "everyone":
-            continue
-        if w.kind == "unknown":
-            why = f"can't tell who can see {f.writes} ({w.reason})"
-        elif r.kind == "unknown":
-            why = f"can't tell who can see {name} ({r.reason})"
-        elif w.kind == "everyone":
-            why = f"{f.writes} is public and {name} isn't"
-        else:
-            sees_r = {login.lower()} if r.kind == "me" else {x.lower() for x in r.logins}
-            extra = [x for x in w.logins if x.lower() not in sees_r]
-            if not extra:
-                continue
-            why = f"{_names(extra)} can see {f.writes} but not {name}"
-        problems.append(Problem(folder, f.writes, name, why))
-    return problems
-
-
-def check(cfg: Config, auds: dict[str, Audience], login: str) -> list[Problem]:
-    """Every folder that breaks the rule, "*" first."""
-    order = sorted(cfg.folders, key=lambda p: (p != STAR, p))
-    return [p for folder in order for p in folder_problems(cfg, folder, auds, login)]
