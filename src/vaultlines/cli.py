@@ -8,87 +8,84 @@ import re
 import shutil
 import sys
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import __version__, bm, claude, config, gitsync, launchd, obsidian
-from .config import LEVELS, Config, Vault
-from .rules import admin_denies, folder_plan, readable, server_name
-from .util import VlError, contract, expand, notify, run, say, warn
+from . import __version__, audience, bm, claude, config, gitsync, launchd, obsidian
+from .audience import Audience, Problem
+from .config import NAME_RE, STAR, Config, Folder, Vault, show
+from .rules import admin_denies, folder_plan
+from .util import VlError, contract, expand, notify, say, warn
 
-NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+OWNER_REPO_RE = re.compile(r"^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$")
+
+
+def _table(rows: list[tuple[str, ...]], indent: str = "  ") -> None:
+    widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
+    for r in rows:
+        say(indent + "  ".join(c.ljust(w) for c, w in zip(r, widths)).rstrip())
 
 
 # ---------------------------------------------------------------- vaults
 
 def _check_new_name(cfg: Config, name: str) -> None:
     if not NAME_RE.match(name):
-        raise VlError("Vault names use lowercase letters, digits and dashes (e.g. acme-public).")
+        raise VlError("Vault names use lowercase letters, digits and dashes (e.g. acme-everyone).")
     if name in cfg.vaults:
         raise VlError(f"A vault named '{name}' already exists.")
 
 
-def _check_team(level: str, team: str | None) -> None:
-    if level != "personal" and not team:
-        raise VlError(f"A {level} vault belongs to a team. Add --team NAME.")
-    if level == "personal" and team:
-        raise VlError("Personal vaults don't belong to a team. Drop --team.")
+def _check_owner_repo(owner_repo: str) -> None:
+    if not OWNER_REPO_RE.match(owner_repo):
+        raise VlError(f"--github takes OWNER/REPO, like acme/acme-notes, not {owner_repo}")
 
 
-def _add_vault(cfg: Config, vault: Vault) -> None:
-    bm.ensure_project(cfg, vault.name, vault.path)
-    cfg.vaults[vault.name] = vault
-    if vault.level == "personal" and not cfg.default_vault:
-        cfg.default_vault = vault.name
-
-
-def create_vault(cfg: Config, name: str, level: str, team: str | None,
-                 remote: str | None, github: str | None, path: str | None) -> Vault:
+def create_vault(cfg: Config, name: str, github: str | None, local: bool, path: str | None) -> Vault:
     _check_new_name(cfg, name)
-    _check_team(level, team)
     vault_path = expand(path) if path else cfg.vaults_dir / name
     if vault_path.exists() and any(vault_path.iterdir()) and not gitsync.is_repo(vault_path):
         raise VlError(f"{contract(vault_path)} already has files. Use `vl vault adopt` instead.")
-    gitsync.init_repo(vault_path)
-
-    choice = "github" if github else (remote or "github")
     url = None
-    if choice == "github":
-        owner_repo = github or (f"{cfg.github_owner}/vault-{name}" if cfg.github_owner else None)
-        if not owner_repo:
-            raise VlError("No GitHub account known. Pass --github OWNER/REPO, or --remote none.")
-        say(f"Creating private GitHub repo {owner_repo}")
-        url = gitsync.create_github_repo(vault_path, owner_repo)
-    elif choice != "none":
-        url = choice
-        gitsync.set_remote(vault_path, url)
-        gitsync.sync(vault_path)
-
-    vault = Vault(name, vault_path, level, team, url)
-    _add_vault(cfg, vault)
-    say(f"Created {level} vault '{name}' at {contract(vault_path)}")
-    return vault
+    if not local:
+        if not github:
+            login = audience.me()
+            if not login:
+                raise VlError("Not signed in to GitHub. Run `gh auth login`, pass --github OWNER/REPO, or use --local.")
+            github = f"{login}/vault-{name}"
+        _check_owner_repo(github)
+    gitsync.init_repo(vault_path)
+    if github:
+        say(f"Creating private GitHub repo {github}")
+        url = gitsync.create_github_repo(vault_path, github)
+    bm.ensure_project(cfg, name, vault_path)
+    cfg.vaults[name] = Vault(name, vault_path, url)
+    say(f"Created vault '{name}' at {contract(vault_path)}" + (f", synced to {url}" if url else ", on this computer only"))
+    return cfg.vaults[name]
 
 
 def cmd_vault_create(args) -> None:
     cfg = config.load()
-    create_vault(cfg, args.name, args.level, args.team, args.remote, args.github, args.path)
+    create_vault(cfg, args.name, args.github, args.local, args.path)
     config.save(cfg)
-    _apply(cfg)
+    _finish(cfg)
 
 
 def cmd_vault_join(args) -> None:
     cfg = config.load()
+    gitsync.check_remote(args.url)
     name = args.name or re.sub(r"\.git$", "", args.url.rstrip("/").split("/")[-1])
     _check_new_name(cfg, name)
-    _check_team(args.level, args.team)
     path = expand(args.path) if args.path else cfg.vaults_dir / name
     say(f"Cloning {args.url}")
     gitsync.clone(args.url, path)
+    if gitsync.git(path, "rev-parse", "--verify", "-q", "HEAD", check=False).returncode != 0:
+        gitsync.init_repo(path)  # an empty repo: this is the first computer to use it
     gitsync.ensure_identity(path)
-    _add_vault(cfg, Vault(name, path, args.level, args.team, args.url))
+    bm.ensure_project(cfg, name, path)
+    cfg.vaults[name] = Vault(name, path, args.url)
     config.save(cfg)
-    say(f"Joined {args.level} vault '{name}' at {contract(path)}")
-    _apply(cfg)
+    say(f"Joined vault '{name}' at {contract(path)}")
+    _finish(cfg)
 
 
 def cmd_vault_adopt(args) -> None:
@@ -98,110 +95,140 @@ def cmd_vault_adopt(args) -> None:
         raise VlError(f"Folder not found: {args.path}")
     name = args.name or path.name
     _check_new_name(cfg, name)
-    _check_team(args.level, args.team)
+    if args.github:
+        _check_owner_repo(args.github)
     if not gitsync.is_repo(path):
         gitsync.init_repo(path)
     gitsync.ensure_identity(path)
-    _add_vault(cfg, Vault(name, path, args.level, args.team, gitsync.remote_url(path)))
+    origin = gitsync.remote_url(path)
+    url = None
+    if args.github:
+        if origin:
+            raise VlError(f"{contract(path)} already syncs to {origin}. Drop --github.")
+        say(f"Creating private GitHub repo {args.github}")
+        url = gitsync.create_github_repo(path, args.github)
+    elif origin:
+        if gitsync.test_remotes() and origin.startswith("file://"):
+            url = origin
+        else:
+            try:
+                url = gitsync.github_url("/".join(gitsync.parse_github(origin)))
+            except VlError:
+                raise VlError(f"{contract(path)} syncs to {origin}. vaultlines only supports GitHub remotes.") from None
+    bm.ensure_project(cfg, name, path)
+    cfg.vaults[name] = Vault(name, path, url)
     config.save(cfg)
-    say(f"Adopted {contract(path)} as {args.level} vault '{name}'")
-    _apply(cfg)
+    say(f"Adopted {contract(path)} as vault '{name}'" + (f", synced to {url}" if url else ", on this computer only"))
+    _finish(cfg)
 
 
 def cmd_vault_remove(args) -> None:
     cfg = config.load()
     vault = cfg.vault(args.name)
-    for folder in [f for f, v in cfg.bindings.items() if v == vault.name]:
-        del cfg.bindings[folder]
-        say(f"Unbound {contract(folder)}")
+    used = cfg.users(vault.name)
+    if used:
+        raise VlError(f"These folders still use '{vault.name}': {', '.join(show(f) for f in sorted(used))}. "
+                      "Change them with `vl folder set` or `vl folder unset` first.")
     del cfg.vaults[vault.name]
-    if cfg.default_vault == vault.name:
-        cfg.default_vault = next((v.name for v in cfg.vaults.values() if v.level == "personal"), None)
     bm.remove_project(cfg, vault.name)
     config.save(cfg)
-    _apply(cfg)
     if args.delete_files:
         shutil.rmtree(vault.path)
         say(f"Deleted {contract(vault.path)}")
     else:
         say(f"Removed vault '{vault.name}'. Its files are still at {contract(vault.path)}")
+    _finish(cfg)
 
 
-# ---------------------------------------------------------------- bindings
+# ---------------------------------------------------------------- folders
 
-def cmd_bind(args) -> None:
+def _folder_arg(text: str) -> str:
+    if text == STAR:
+        return STAR
+    path = expand(text)
+    if not path.is_dir():
+        raise VlError(f"Folder not found: {text}")
+    return str(path)
+
+
+def _describe(f: Folder) -> str:
+    text = f"{show(f.path)} writes to {f.writes}"
+    if f.reads:
+        text += f" and reads {', '.join(f.reads)} (writing there asks first)"
+    return text + ("; pulled on every sync" if f.auto_pull else "")
+
+
+def cmd_folder_set(args) -> None:
     cfg = config.load()
-    vault = cfg.vault(args.vault)
-    folder = expand(args.folder or ".")
-    if not folder.is_dir():
-        raise VlError(f"Folder not found: {args.folder}")
-    cfg.bindings[str(folder)] = vault.name
+    folder = _folder_arg(args.path)
+    reads = list(dict.fromkeys(r.strip() for r in (args.reads or "").split(",") if r.strip()))
+    if args.auto_pull and folder != STAR and not gitsync.in_work_tree(Path(folder)):
+        raise VlError(f"{contract(folder)} isn't in a git repo, so it can't use --auto-pull.")
+    cfg.folders[folder] = Folder(folder, args.writes, reads, args.auto_pull)
+    config.validate(cfg)
+    auds, errors = audience.audiences(cfg)
+    problems = audience.folder_problems(cfg, folder, auds, audience.cached_me())
+    if problems:
+        raise VlError("\n".join(p.message() for p in problems) + "\nNothing changed.")
     config.save(cfg)
-    _apply(cfg)
-    plan = folder_plan(cfg, str(folder), vault.name)
-    reads = f"; can also read {', '.join(plan.reads)} (writes there ask first)" if plan.reads else ""
-    say(f"Bound {contract(folder)} to '{vault.name}'{reads}")
+    say(_describe(cfg.folders[folder]))
+    _finish(cfg, auds, errors)
 
 
-def cmd_unbind(args) -> None:
+def cmd_folder_unset(args) -> None:
     cfg = config.load()
-    folder = str(expand(args.folder or "."))
-    if folder not in cfg.bindings:
-        raise VlError(f"{contract(folder)} isn't bound to a vault.")
-    del cfg.bindings[folder]
+    folder = STAR if args.path == STAR else str(expand(args.path))
+    if folder not in cfg.folders:
+        raise VlError(f"{show(folder)} isn't listed in the config.")
+    del cfg.folders[folder]
     config.save(cfg)
-    _apply(cfg)
-    say(f"Unbound {contract(folder)}")
-
-
-def cmd_follow(args) -> None:
-    cfg = config.load()
-    path = str(expand(args.path))
-    if not gitsync.is_repo(Path(path)):
-        raise VlError(f"{args.path} isn't a git repo.")
-    if path not in cfg.follow:
-        cfg.follow.append(path)
-        config.save(cfg)
-    say(f"{contract(path)} will be kept up to date (pull only) on every sync")
-
-
-def cmd_unfollow(args) -> None:
-    cfg = config.load()
-    path = str(expand(args.path))
-    if path in cfg.follow:
-        cfg.follow.remove(path)
-        config.save(cfg)
-    say(f"Stopped following {contract(path)}")
+    say(f"{show(folder)} is no longer listed" + ("." if folder == STAR else '; it uses "*" now.'))
+    _finish(cfg)
 
 
 # ---------------------------------------------------------------- apply
 
-def _apply(cfg: Config) -> list[str]:
-    """Make Basic Memory, Claude Code and Obsidian match the config."""
-    problems = []
+@dataclass
+class Applied:
+    refused: list[Problem] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)  # vaults GitHub couldn't be asked about
+
+
+def _apply(cfg: Config, auds: dict[str, Audience] | None = None, errors: list[str] | None = None) -> Applied:
+    """Make Basic Memory, Claude Code and Obsidian match the config, for the folders that pass the check."""
+    warnings = []
 
     for v in cfg.vaults.values():
         if not v.path.exists():
-            problems.append(f"vault '{v.name}': folder {contract(v.path)} is missing")
+            warnings.append(f"vault '{v.name}': folder {contract(v.path)} is missing")
             continue
         if not gitsync.is_repo(v.path):
             gitsync.init_repo(v.path)
         bm.ensure_project(cfg, v.name, v.path)
-    if cfg.default_vault:
-        bm.set_default(cfg, cfg.default_vault)
 
-    # User level: the default personal vault, available in every folder.
-    wanted = {server_name(cfg.default_vault): bm.mcp_argv(cfg, cfg.default_vault)} if cfg.default_vault else {}
+    if auds is None:
+        auds, errors = audience.audiences(cfg)
+    errors = errors or []
+    refused = audience.check(cfg, auds, audience.cached_me())
+    refused_folders = {p.folder for p in refused}
+
+    # User level: the "*" entry, available in every folder. If its reads are refused, only its write vault.
+    user = folder_plan(cfg, STAR, drop_reads=STAR in refused_folders) if cfg.star else None
+    wanted = {name: bm.mcp_argv(cfg, vault) for name, vault in (user.servers.items() if user else [])}
     current = claude.user_servers()
     for name in current.keys() - wanted.keys():
         claude.remove_server(name, "user")
     for name, argv in wanted.items():
         if name not in current or not claude.same_server(current[name], argv):
             claude.add_server(name, argv, "user")
-    claude.update_settings(claude.user_settings_path(), primary=cfg.default_vault, deny=admin_denies(cfg))
+    claude.update_settings(claude.user_settings_path(), primary=user.writes if user else None,
+                           reads=user.reads if user else None, ask=user.ask if user else None,
+                           deny=admin_denies(cfg))
+    if user:
+        bm.set_default(cfg, user.writes)
 
-    # Bound folders.
-    plans = {folder: folder_plan(cfg, folder, vault) for folder, vault in cfg.bindings.items()}
+    # Listed folders. Refused ones aren't set up, so they fall back to "*".
+    plans = {f.path: folder_plan(cfg, f.path) for f in cfg.listed() if f.path not in refused_folders}
     existing = claude.folder_servers()
     for folder in existing.keys() - plans.keys():
         if Path(folder).is_dir():
@@ -209,10 +236,10 @@ def _apply(cfg: Config) -> list[str]:
                 claude.remove_server(name, "local", cwd=folder)
             claude.update_settings(Path(folder) / ".claude" / "settings.local.json", primary=None)
         else:
-            problems.append(f"{contract(folder)} is gone but still has vl servers in Claude Code")
+            warnings.append(f"{contract(folder)} is gone but still has vl servers in Claude Code")
     for folder, plan in plans.items():
         if not Path(folder).is_dir():
-            problems.append(f"bound folder {contract(folder)} is missing")
+            warnings.append(f"folder {contract(folder)} is missing")
             continue
         have = existing.get(folder, {})
         for name in have.keys() - plan.servers.keys():
@@ -222,8 +249,11 @@ def _apply(cfg: Config) -> list[str]:
             if name not in have or not claude.same_server(have[name], argv):
                 claude.add_server(name, argv, "local", cwd=folder)
         claude.update_settings(Path(folder) / ".claude" / "settings.local.json",
-                               primary=plan.vault, reads=plan.reads, ask=plan.ask, deny=plan.deny)
+                               primary=plan.writes, reads=plan.reads, ask=plan.ask, deny=plan.deny)
         claude.git_ignore_local_settings(folder)
+    for f in cfg.listed():
+        if f.auto_pull and Path(f.path).is_dir() and not gitsync.in_work_tree(Path(f.path)):
+            warnings.append(f"{contract(f.path)} has auto_pull but isn't in a git repo")
 
     todo = obsidian.register([v.path for v in cfg.vaults.values() if v.path.exists()])
     if todo:
@@ -231,14 +261,43 @@ def _apply(cfg: Config) -> list[str]:
         for p in todo:
             say(f"  {contract(p)}")
 
-    for p in problems:
-        warn(p)
-    return problems
+    state = audience.load_state()
+    state["refused"] = sorted(refused_folders)
+    if not errors:
+        state["checked_at"] = time.time()
+    audience.save_state(state)
+
+    for w in warnings:
+        warn(w)
+    for e in errors:
+        warn(e)
+    _print_refused(cfg, refused)
+    return Applied(refused, errors)
+
+
+def _print_refused(cfg: Config, refused: list[Problem]) -> None:
+    for p in refused:
+        print(f"error: {p.message()}", file=sys.stderr)
+    for folder in dict.fromkeys(p.folder for p in refused):
+        if folder == STAR:
+            fallback = f'"*" gets only {cfg.star.writes} until this is fixed.'
+        else:
+            fallback = f'{show(folder)} isn\'t set up, so it uses "*" for now.'
+        print(f"       {fallback}", file=sys.stderr)
+    if refused:
+        print("       Change the folder's reads, or who can see the vaults, then run `vl apply`.", file=sys.stderr)
+
+
+def _finish(cfg: Config, auds: dict[str, Audience] | None = None, errors: list[str] | None = None) -> None:
+    if _apply(cfg, auds, errors).refused:
+        sys.exit(1)
 
 
 def cmd_apply(args) -> None:
-    problems = _apply(config.load())
-    say("Applied." if not problems else "Applied, with the warnings above.")
+    result = _apply(config.load())
+    if result.refused:
+        sys.exit(1)
+    say("Applied." if not result.errors else "Applied, with the warnings above.")
 
 
 # ---------------------------------------------------------------- init
@@ -251,15 +310,15 @@ REQUIRED = {
 
 
 def cmd_init(args) -> None:
-    missing = [f"  {tool}: {hint}" for tool, hint in REQUIRED.items() if not shutil.which(tool)]
+    required = dict(REQUIRED)
+    if not args.local:
+        required["gh"] = "https://cli.github.com (or use --local for a personal vault on this computer only)"
+    missing = [f"  {tool}: {hint}" for tool, hint in required.items() if not shutil.which(tool)]
     if missing:
         raise VlError("Install these first:\n" + "\n".join(missing))
     cfg = config.load()
     if args.interval:
         cfg.sync_interval = args.interval
-    if not cfg.github_owner and shutil.which("gh"):
-        cfg.github_owner = run(["gh", "api", "user", "--jq", ".login"], check=False).stdout.strip() or None
-    config.save(cfg)
 
     say("Configuring Basic Memory")
     bm.configure(cfg)
@@ -267,17 +326,21 @@ def cmd_init(args) -> None:
         say("Installing the Basic Memory plugin for Claude Code")
         claude.install_plugin()
 
-    if not args.no_personal and not any(v.level == "personal" for v in cfg.vaults.values()):
-        create_vault(cfg, "personal", "personal", None, args.personal_remote, None, None)
+    if not cfg.star:
+        if "personal" not in cfg.vaults:
+            create_vault(cfg, "personal", None, args.local, None)
+        cfg.folders[STAR] = Folder(STAR, "personal", [])
     config.save(cfg)
-    _apply(cfg)
+    result = _apply(cfg)
 
     if launchd.supported():
         launchd.install(cfg.sync_interval)
         say(f"Sync runs every {cfg.sync_interval // 60} min. Log: {contract(launchd.log_path())}")
     elif sys.platform != "darwin":
         say(f"No background sync on this system yet. Add a cron job: */10 * * * * {shutil.which('vl') or 'vl'} sync --background")
-    say("\nDone. Next: `vl vault create`, `vl vault join`, or `vl bind`. See `vl status`.")
+    say("\nDone. Next: `vl vault create`, `vl vault join`, or `vl folder set`. See `vl status`.")
+    if result.refused:
+        sys.exit(1)
 
 
 def cmd_uninstall(args) -> None:
@@ -286,6 +349,20 @@ def cmd_uninstall(args) -> None:
 
 
 # ---------------------------------------------------------------- sync
+
+def _daily_check(cfg: Config, stamp, background: bool) -> None:
+    """Ask GitHub again, re-apply, and tell the user about folders that stopped passing."""
+    before = set(audience.load_state().get("refused", []))
+    result = _apply(cfg)
+    new = [p for p in result.refused if p.folder not in before]
+    for p in new:
+        say(f"{stamp()}check: {p.message()}")
+    if new and background:
+        folders = ", ".join(dict.fromkeys(show(p.folder) for p in new))
+        notify(f"No longer set up: {folders}. Who can see its vaults changed. Run `vl check`.")
+    if result.errors:
+        say(f"{stamp()}check: couldn't reach GitHub for every vault; trying again next sync")
+
 
 def cmd_sync(args) -> None:
     cfg = config.load()
@@ -298,6 +375,8 @@ def cmd_sync(args) -> None:
             say("Another sync is running.")
             return
         stamp = (lambda: time.strftime("%Y-%m-%d %H:%M:%S ")) if args.background else (lambda: "")
+        if not args.vault and time.time() - audience.load_state().get("checked_at", 0) >= audience.DAY:
+            _daily_check(cfg, stamp, args.background)
         vaults = [cfg.vault(args.vault)] if args.vault else list(cfg.vaults.values())
         failed = []
         for v in vaults:
@@ -309,52 +388,84 @@ def cmd_sync(args) -> None:
                 failed.append(v.name)
                 say(f"{stamp()}{v.name}: FAILED: {e}")
         if not args.vault:
-            for repo in cfg.follow:
+            for f in cfg.listed():
+                if not f.auto_pull:
+                    continue
                 try:
-                    gitsync.pull_only(Path(repo))
+                    gitsync.pull_only(Path(f.path))
+                    if not args.background:
+                        say(f"{contract(f.path)}: pulled")
                 except VlError as e:
-                    say(f"{stamp()}{contract(repo)}: update skipped: {str(e).splitlines()[-1]}")
+                    say(f"{stamp()}{contract(f.path)}: pull skipped: {str(e).splitlines()[-1]}")
         if failed:
             if args.background:
                 notify(f"Couldn't sync: {', '.join(failed)}. Run `vl sync` to see why.")
             sys.exit(1)
 
 
-# ---------------------------------------------------------------- status / doctor
+# ---------------------------------------------------------------- check / status / doctor
+
+def _folder_rows(cfg: Config, problems: list[Problem]) -> list[tuple[str, ...]]:
+    refused = {p.folder for p in problems}
+    rows = [("folder", "writes", "reads", "auto_pull", "check")]
+    for path in sorted(cfg.folders, key=lambda p: (p != STAR, p)):
+        f = cfg.folders[path]
+        rows.append((show(path), f.writes, ", ".join(f.reads) or "-", "yes" if f.auto_pull else "",
+                     "REFUSED" if path in refused else "ok"))
+    return rows
+
+
+def _print_problems(problems: list[Problem]) -> None:
+    if problems:
+        say("")
+        for p in problems:
+            say(f"  REFUSED  {p.message()}")
+
+
+def cmd_check(args) -> None:
+    cfg = config.load()
+    auds, errors = audience.audiences(cfg)
+    problems = audience.check(cfg, auds, audience.cached_me())
+    say("Who can see each vault")
+    _table([("vault", "who can see it")] + [(name, auds[name].describe()) for name in sorted(auds)])
+    if cfg.folders:
+        say("\nFolders")
+        _table(_folder_rows(cfg, problems))
+    _print_problems(problems)
+    for e in errors:
+        warn(e)
+    if problems:
+        sys.exit(1)
+
 
 def cmd_status(args) -> None:
     cfg = config.load()
     if not cfg.vaults:
         say("No vaults yet. Run `vl init`.")
         return
+    auds, _ = audience.audiences(cfg, fresh=False)
     say("Vaults")
-    rows = []
-    for v in sorted(cfg.vaults.values(), key=lambda v: (LEVELS.index(v.level), v.name)):
-        default = " (default)" if v.name == cfg.default_vault else ""
-        level = f"{v.level}:{v.team}" if v.team else v.level
+    rows = [("vault", "path", "remote", "state", "who can see it")]
+    for v in sorted(cfg.vaults.values(), key=lambda v: v.name):
         if v.path.exists() and gitsync.is_repo(v.path):
             pending = gitsync.pending_changes(v.path)
             state = f"last commit {gitsync.last_commit_age(v.path)}" + (f", {pending} unsaved" if pending else "")
         else:
             state = "MISSING"
-        remote = (v.remote or "no remote").replace("https://github.com/", "github:").removesuffix(".git")
-        rows.append((v.name + default, level, contract(v.path), remote, state))
-    widths = [max(len(r[i]) for r in rows) for i in range(4)]
-    for r in rows:
-        say("  " + "  ".join(r[i].ljust(widths[i]) for i in range(4)) + "  " + r[4])
-
+        remote = (v.remote or "-").replace("https://github.com/", "github:").removesuffix(".git")
+        rows.append((v.name, contract(v.path), remote, state, auds[v.name].describe()))
+    _table(rows)
+    problems = audience.check(cfg, auds, audience.cached_me())
     say("\nFolders")
-    say(f"  (everywhere else)  -> {cfg.default_vault or 'no vault'}")
-    for folder, vault in sorted(cfg.bindings.items()):
-        reads = readable(cfg, vault) if vault in cfg.vaults else []
-        extra = f"  (also reads {', '.join(reads)})" if reads else ""
-        say(f"  {contract(folder)}  -> {vault}{extra}")
-    if cfg.follow:
-        say("\nFollowed repos (pull only)")
-        for repo in cfg.follow:
-            say(f"  {contract(repo)}")
+    if cfg.folders:
+        _table(_folder_rows(cfg, problems))
+    else:
+        say('  none. Add one with `vl folder set "*" --writes VAULT`.')
+    _print_problems(problems)
+    checked = audience.load_state().get("checked_at")
+    say(f"\nLast checked with GitHub: {time.strftime('%Y-%m-%d %H:%M', time.localtime(checked)) if checked else 'never'}")
     if launchd.supported():
-        say(f"\nBackground sync: {'on' if launchd.loaded() else 'OFF (run `vl init`)'}, every {cfg.sync_interval // 60} min")
+        say(f"Background sync: {'on' if launchd.loaded() else 'OFF (run `vl init`)'}, every {cfg.sync_interval // 60} min")
 
 
 def cmd_doctor(args) -> None:
@@ -367,24 +478,35 @@ def cmd_doctor(args) -> None:
         say(f"  {'ok  ' if passed else 'FAIL'}  {text}" + ("" if passed or not fix else f"  -> {fix}"))
 
     say("Tools")
+    needs_gh = any(v.remote for v in cfg.vaults.values())
     for tool in ("git", "uvx", "claude", "gh"):
         found = shutil.which(tool)
-        check(bool(found) or tool == "gh", f"{tool}: {found or 'not found (only needed for GitHub remotes)'}")
+        optional = tool == "gh" and not needs_gh
+        check(bool(found) or optional, f"{tool}: {found or ('not found (only needed for GitHub remotes)' if optional else 'not found')}")
     say("Basic Memory")
     check(bm.setting(cfg, "disable_permalinks").lower().endswith("true"), "permalinks off", "vl init")
     projects = bm.projects(cfg)
     for v in cfg.vaults.values():
         check(v.path.exists() and gitsync.is_repo(v.path), f"vault '{v.name}' is a git repo", "vl apply")
         check(projects.get(v.name) == v.path, f"vault '{v.name}' is a Basic Memory project", "vl apply")
+        origin = gitsync.remote_url(v.path) if gitsync.is_repo(v.path) else None
+        same = (origin is None and v.remote is None) or (
+            origin is not None and v.remote is not None and gitsync.repo_key(origin) == gitsync.repo_key(v.remote))
+        check(same, f"vault '{v.name}' syncs to the remote in the config ({v.remote or 'none'})",
+              f"git remote is {origin or 'none'}; fix one of them")
     say("Claude Code")
     check(claude.plugin_installed(), "Basic Memory plugin installed", "vl init")
-    user = claude.user_servers()
-    if cfg.default_vault:
-        check(server_name(cfg.default_vault) in user, f"{server_name(cfg.default_vault)} available everywhere", "vl apply")
+    refused = set(audience.load_state().get("refused", []))
+    if cfg.star:
+        wanted = set(folder_plan(cfg, STAR, drop_reads=STAR in refused).servers)
+        check(set(claude.user_servers()) == wanted, f"{', '.join(sorted(wanted))} available everywhere", "vl apply")
     folders = claude.folder_servers()
-    for folder, vault in cfg.bindings.items():
-        wanted = set(folder_plan(cfg, folder, vault).servers) if vault in cfg.vaults else set()
-        check(set(folders.get(folder, {})) == wanted, f"{contract(folder)} has the right servers", "vl apply")
+    for f in cfg.listed():
+        if f.path in refused:
+            check(False, f"{contract(f.path)} passes the audience check", "vl check")
+            continue
+        wanted = set(folder_plan(cfg, f.path).servers)
+        check(set(folders.get(f.path, {})) == wanted, f"{contract(f.path)} has the right servers", "vl apply")
     if launchd.supported():
         say("Sync")
         check(launchd.loaded(), "background sync is on", "vl init")
@@ -401,9 +523,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True, metavar="COMMAND")
 
     s = sub.add_parser("init", help="set up this computer")
-    s.add_argument("--no-personal", action="store_true", help="don't create a personal vault")
-    s.add_argument("--personal-remote", default=None, metavar="github|none|URL",
-                   help="where the personal vault syncs (default: a private GitHub repo)")
+    s.add_argument("--local", action="store_true",
+                   help="keep the personal vault on this computer only (default: a private GitHub repo)")
     s.add_argument("--interval", type=int, help="seconds between background syncs (default 600)")
     s.set_defaults(func=cmd_init)
 
@@ -412,25 +533,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = vsub.add_parser("create", help="create a new vault")
     s.add_argument("name")
-    s.add_argument("--level", required=True, choices=LEVELS)
-    s.add_argument("--team")
-    s.add_argument("--remote", metavar="github|none|URL", help="default: a private GitHub repo")
-    s.add_argument("--github", metavar="OWNER/REPO", help="GitHub repo to create (default OWNER/vault-NAME)")
+    where = s.add_mutually_exclusive_group()
+    where.add_argument("--github", metavar="OWNER/REPO", help="private GitHub repo to create (default YOU/vault-NAME)")
+    where.add_argument("--local", action="store_true", help="no remote: this computer only")
     s.add_argument("--path", help="default: ~/Vaults/NAME")
     s.set_defaults(func=cmd_vault_create)
 
-    s = vsub.add_parser("join", help="clone a vault someone else created")
-    s.add_argument("url")
-    s.add_argument("--level", required=True, choices=LEVELS)
-    s.add_argument("--team")
+    s = vsub.add_parser("join", help="clone a vault from GitHub")
+    s.add_argument("url", help="https://github.com/OWNER/REPO.git")
     s.add_argument("--name", help="default: the repo name")
     s.add_argument("--path", help="default: ~/Vaults/NAME")
     s.set_defaults(func=cmd_vault_join)
 
-    s = vsub.add_parser("adopt", help="manage a folder that is already a vault")
+    s = vsub.add_parser("adopt", help="manage a folder that already has notes")
     s.add_argument("path")
-    s.add_argument("--level", required=True, choices=LEVELS)
-    s.add_argument("--team")
+    s.add_argument("--github", metavar="OWNER/REPO", help="also create a private GitHub repo for it")
     s.add_argument("--name", help="default: the folder name")
     s.set_defaults(func=cmd_vault_adopt)
 
@@ -442,28 +559,26 @@ def build_parser() -> argparse.ArgumentParser:
     s = vsub.add_parser("list", help="same as `vl status`")
     s.set_defaults(func=cmd_status)
 
-    s = sub.add_parser("bind", help="make a folder use a vault")
-    s.add_argument("vault")
-    s.add_argument("folder", nargs="?", help="default: the current folder")
-    s.set_defaults(func=cmd_bind)
+    folder = sub.add_parser("folder", help="choose which vaults a folder writes and reads")
+    fsub = folder.add_subparsers(dest="folder_command", required=True, metavar="ACTION")
 
-    s = sub.add_parser("unbind", help="make a folder use the default vault again")
-    s.add_argument("folder", nargs="?", help="default: the current folder")
-    s.set_defaults(func=cmd_unbind)
+    s = fsub.add_parser("set", help="set a folder's vaults (replaces its entry)")
+    s.add_argument("path", help='a folder, or "*" for every folder that isn\'t listed')
+    s.add_argument("--writes", required=True, metavar="VAULT", help="the one vault this folder writes to")
+    s.add_argument("--reads", metavar="A,B", help="other vaults it can read; writing to them asks first")
+    s.add_argument("--auto-pull", action="store_true", help="git pull this folder on every sync (fast-forward only)")
+    s.set_defaults(func=cmd_folder_set)
 
-    s = sub.add_parser("follow", help="keep a git repo pulled on every sync (e.g. a team workspace)")
+    s = fsub.add_parser("unset", help='remove a folder\'s entry (it then uses "*")')
     s.add_argument("path")
-    s.set_defaults(func=cmd_follow)
-
-    s = sub.add_parser("unfollow", help="stop following a repo")
-    s.add_argument("path")
-    s.set_defaults(func=cmd_unfollow)
+    s.set_defaults(func=cmd_folder_unset)
 
     s = sub.add_parser("sync", help="sync vaults now")
     s.add_argument("vault", nargs="?")
     s.add_argument("--background", action="store_true", help=argparse.SUPPRESS)
     s.set_defaults(func=cmd_sync)
 
+    sub.add_parser("check", help="ask GitHub who can see each vault, and check every folder").set_defaults(func=cmd_check)
     sub.add_parser("apply", help="rewrite Claude Code settings from the config").set_defaults(func=cmd_apply)
     sub.add_parser("status", help="show vaults, folders and sync").set_defaults(func=cmd_status)
     sub.add_parser("doctor", help="check that everything is set up").set_defaults(func=cmd_doctor)

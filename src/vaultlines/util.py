@@ -70,7 +70,7 @@ def warn(message: str) -> None:
 
 
 def notify(message: str) -> None:
-    """Show a macOS notification. Does nothing elsewhere."""
-    if sys.platform == "darwin":
+    """Show a macOS notification. Does nothing elsewhere, or in tests."""
+    if sys.platform == "darwin" and os.environ.get("VAULTLINES_NO_NOTIFY") != "1":
         script = f"display notification {json.dumps(message)} with title \"vaultlines\""
         subprocess.run(["osascript", "-e", script], capture_output=True)

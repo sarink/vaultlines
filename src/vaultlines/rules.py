@@ -1,23 +1,21 @@
 """The access rules. Pure functions: config in, plan out.
 
-A folder bound to a vault can:
-  - read and write its own vault
-  - read some other vaults, and write to them only after asking:
-      personal vault -> every public vault
-      private vault  -> the public vaults of the same team
-      public vault   -> nothing else
-  - never use the default personal vault (unless it is the bound vault)
+Each folder writes to one vault W and lists the vaults it reads. A folder can:
+  - read and write W
+  - read each vault in `reads`, and write to them only after asking
+  - not use any other vault
 
-This is "no read up, no write down": a folder never sees a vault that is more
-private than its own, and moving information into a less private vault always
-goes through a person.
+Folders that aren't listed use the "*" entry, which is set up at the user level,
+so its vaults are available everywhere. Listed folders deny the ones they don't use.
+
+Whether a folder may read what it lists is decided separately, in audience.py.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .config import Config
+from .config import STAR, Config
 
 PREFIX = "vl-"
 WRITE_TOOLS = ("write_note", "edit_note", "delete_note", "move_note")
@@ -35,32 +33,26 @@ def is_managed_rule(rule: str) -> bool:
 @dataclass
 class FolderPlan:
     folder: str
-    vault: str
+    writes: str
+    reads: list[str]
     servers: dict[str, str]  # server name -> vault name
-    reads: list[str]  # other vaults this folder can read
     ask: list[str]
     deny: list[str]
 
 
-def readable(cfg: Config, vault: str) -> list[str]:
-    v = cfg.vault(vault)
-    others = [o for o in cfg.vaults.values() if o.name != vault and o.level == "public"]
-    if v.level == "personal":
-        return sorted(o.name for o in others)
-    if v.level == "private":
-        return sorted(o.name for o in others if o.team and o.team == v.team)
-    return []
-
-
-def folder_plan(cfg: Config, folder: str, vault: str) -> FolderPlan:
-    reads = readable(cfg, vault)
-    servers = {server_name(n): n for n in [vault, *reads]}
+def folder_plan(cfg: Config, folder: str, drop_reads: bool = False) -> FolderPlan:
+    """What a folder gets. `drop_reads` sets up only the write vault (for a refused "*")."""
+    f = cfg.folders[folder]
+    reads = [] if drop_reads else list(f.reads)
+    servers = {server_name(n): n for n in [f.writes, *reads]}
     ask = [f"mcp__{server_name(n)}__{tool}" for n in reads for tool in WRITE_TOOLS]
     deny = []
-    default = cfg.default_vault
-    if default and default != vault and default not in reads:
-        deny.append(f"mcp__{server_name(default)}")
-    return FolderPlan(folder, vault, servers, reads, ask, deny)
+    star = cfg.star
+    if folder != STAR and star:
+        for n in [star.writes, *star.reads]:
+            if n not in servers.values():
+                deny.append(f"mcp__{server_name(n)}")
+    return FolderPlan(folder, f.writes, reads, servers, ask, deny)
 
 
 def admin_denies(cfg: Config) -> list[str]:

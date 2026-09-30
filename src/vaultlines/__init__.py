@@ -1,3 +1,3 @@
-"""Personal and team Basic Memory vaults for Claude Code, with access levels and git sync."""
+"""Personal and team Basic Memory vaults for Claude Code, checked against GitHub access."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

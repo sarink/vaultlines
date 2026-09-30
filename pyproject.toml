@@ -1,7 +1,7 @@
 [project]
 name = "vaultlines"
-version = "0.1.0"
-description = "Personal and team Basic Memory vaults for Claude Code, with access levels and git sync."
+version = "0.2.0"
+description = "Personal and team Basic Memory vaults for Claude Code. Folders declare what they write and read; GitHub access lists keep notes from leaking."
 readme = "README.md"
 license = "MIT"
 authors = [{ name = "Kabir Sarin" }]
