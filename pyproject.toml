@@ -1,0 +1,23 @@
+[project]
+name = "vaultlines"
+version = "0.1.0"
+description = "Personal and team Basic Memory vaults for Claude Code, with access levels and git sync."
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Kabir Sarin" }]
+requires-python = ">=3.11"
+dependencies = ["tomli-w>=1.0"]
+keywords = ["claude", "claude-code", "basic-memory", "obsidian", "knowledge-base", "mcp"]
+
+[project.scripts]
+vl = "vaultlines.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/sarink/vaultlines"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
