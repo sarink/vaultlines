@@ -66,6 +66,8 @@ def install(interval: int) -> None:
 
 
 def uninstall() -> None:
+    if not supported():  # also keeps tests from stopping the real job: launchd is per user, not per HOME
+        return
     run(["launchctl", "bootout", f"gui/{os.getuid()}/{LABEL}"], check=False)
     plist_path().unlink(missing_ok=True)
 
