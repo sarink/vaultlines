@@ -65,6 +65,7 @@ check "init lists ~ with the personal vault" grep -q '^\[folders."~"\]' "$CONFIG
 check "init turns the Basic Memory adapter on" grep -q '^\[adapters.basic-memory\]' "$CONFIG"
 check "hooks installed for SessionStart and PreToolUse" \
   jq -e '[.hooks.SessionStart[].hooks[].command, .hooks.PreToolUse[].hooks[].command] | map(endswith("vl hook")) | all and length == 2' "$ROOT/alice/.claude/settings.json"
+check "  ...and UserPromptSubmit" jq -e '.hooks.UserPromptSubmit[0].hooks[0].command | endswith("vl hook")' "$ROOT/alice/.claude/settings.json"
 check "one basic-memory server, at user level" test "$(user_servers alice)" = "basic-memory"
 check "the server isn't locked to one project" jq -e '.mcpServers["basic-memory"].args == ["basic-memory", "mcp"]' "$ROOT/alice/.claude/.claude.json"
 check "plugin writes to personal at user level" jq -e '.basicMemory.primaryProject == "personal"' "$ROOT/alice/.claude/settings.json"
@@ -100,6 +101,12 @@ check "writing everyone (a read vault) asks" test "$(hook alice "$LEGAL" "$(writ
 check "the app folder can't use acme-founders" test "$(hook alice "$APP" "$(read_event "$FOUNDERS/b.md" | jq -c '. + {session_id: "app"}')")" = "deny"
 check "Basic Memory calls get the folder's vault" \
   grep -q '"project": "acme-everyone"' <<<"$(jq -nc --arg cwd "$APP" '{hook_event_name: "PreToolUse", session_id: "bm", cwd: $cwd, tool_name: "mcp__basic-memory__search_notes", tool_input: {query: "x"}}' | CLAUDE_PROJECT_DIR="$APP" vl alice hook)"
+VLCMD='{"hook_event_name": "PreToolUse", "session_id": "guard", "tool_name": "Bash", "tool_input": {"command": "vl folder set . --reads acme-founders"}}'
+hook alice "$APP" '{"hook_event_name": "UserPromptSubmit", "session_id": "guard", "prompt": "tidy the notes"}' >/dev/null
+check "Claude running vl folder set on its own asks" test "$(hook alice "$APP" "$VLCMD")" = "ask"
+hook alice "$APP" '{"hook_event_name": "UserPromptSubmit", "session_id": "guard", "prompt": "run vl folder set for me"}' >/dev/null
+check "  ...but not when you asked for vl" test "$(hook alice "$APP" "$VLCMD")" = "allow"
+check "vl's session records can't be written" test "$(hook alice "$APP" "$(write_event "$ROOT/alice/.local/state/vaultlines/runtime.json")")" = "deny"
 check "vl sessions shows the session's label" grep -q "acme-everyone" <<<"$(vl alice sessions)"
 
 echo "== reads that would leak ask, and check says where"

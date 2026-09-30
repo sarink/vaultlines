@@ -20,7 +20,7 @@ from .util import home, read_json, run, write_json
 MARKETPLACE = "https://github.com/basicmachines-co/basic-memory.git"
 PLUGIN = "basic-memory@basicmachines-co"
 V2_PREFIX = "vl-"
-HOOK_EVENTS = ("SessionStart", "PreToolUse")
+HOOK_EVENTS = ("SessionStart", "UserPromptSubmit", "PreToolUse")
 HOOK_TIMEOUT = 10
 
 
@@ -182,6 +182,7 @@ def wanted_hooks(command: str) -> dict:
 
     hook = {"type": "command", "command": command, "timeout": HOOK_TIMEOUT}
     return {"SessionStart": [{"hooks": [hook]}],
+            "UserPromptSubmit": [{"hooks": [hook]}],
             "PreToolUse": [{"matcher": MATCHER, "hooks": [hook]}]}
 
 

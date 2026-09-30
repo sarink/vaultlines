@@ -182,8 +182,8 @@ GitHub can't be reached, `vl` keeps the last answer and tries again at the next 
 
 ### How the hook sees which vault a call uses
 
-The hook is `vl hook`, installed in `~/.claude/settings.json` for `SessionStart` and
-for these tools only: `Read`, `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `Grep`,
+The hook is `vl hook`, installed in `~/.claude/settings.json` for `SessionStart`,
+`UserPromptSubmit`, and these tools only: `Read`, `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `Grep`,
 `Glob`, `Bash` and Basic Memory's. It reads a small file that `vl` writes
 (`~/.local/state/vaultlines/runtime.json`), never the config or GitHub, and adds about
 50 ms to each of those calls.
@@ -206,6 +206,24 @@ for these tools only: `Read`, `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `Gre
 
 If the hook itself fails, calls that may touch a vault are blocked with
 "vl hook error: run `vl doctor`". Other calls are never blocked.
+
+### Claude can't quietly loosen vl
+
+Claude can run `vl` and edit files like anything else. So an over-helpful Claude (or
+instructions hidden in a note, an email or a web page) could try to get around a block
+by changing vl itself. The hook watches for that:
+
+- **Blocked:** writing to vl's session records or `runtime.json`. Only vl writes those.
+- **Asks first:**
+  - `vl init`, `apply`, `uninstall`, `folder` or `vault` run by Claude;
+  - edits to vl's config;
+  - Bash commands that mention vl's config or state folders;
+  - settings edits that remove vl's hooks or turn on `disableAllHooks`.
+- **Unless you asked:** if your latest message mentions `vl` or vaultlines, those
+  changes go through without a question. The hook learns this from what you type (on
+  `UserPromptSubmit`), so Claude can't set it itself.
+
+The leak checks above always apply, whatever you asked.
 
 ### What the Basic Memory plugin does on its own
 
@@ -331,7 +349,7 @@ in `~/.config/vaultlines/state.json`.
 
 | Where | What |
 |---|---|
-| `~/.claude/settings.json` | Hooks whose command is `vl hook`, and the `basicMemory` block for the folder that covers your home folder. |
+| `~/.claude/settings.json` | Hooks whose command is `vl hook` (`SessionStart`, `UserPromptSubmit`, `PreToolUse`), and the `basicMemory` block for the folder that covers your home folder. |
 | `<folder>/.claude/settings.local.json` | The `basicMemory` block. If the folder is a git repo and the file isn't ignored yet, `vl` adds it to `.git/info/exclude`. |
 | Claude Code MCP servers | One user-level server named `basic-memory`. |
 | Basic Memory | One project per vault, with the vault's name. |

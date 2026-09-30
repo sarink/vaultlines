@@ -135,11 +135,12 @@ def sync(path: Path) -> str:
     if not is_repo(path):
         raise VlError(f"{path} is not a git repo. Run `vl apply` to set it up.")
     git(path, "add", "-A")
-    if git(path, "diff", "--cached", "--quiet", check=False).returncode != 0:
+    committed = git(path, "diff", "--cached", "--quiet", check=False).returncode != 0
+    if committed:
         who = f"{getpass.getuser()}@{socket.gethostname().split('.')[0]}"
         git(path, "commit", "-q", "-m", f"Notes from {who}")
     if not remote_url(path):
-        return "committed (no remote)"
+        return "committed (no remote)" if committed else "synced"
     b = branch(path)
     remote_has_branch = bool(git(path, "ls-remote", "--heads", "origin", b).stdout.strip())
     if remote_has_branch and git(path, "pull", "-q", "--rebase", "origin", b, check=False).returncode != 0:

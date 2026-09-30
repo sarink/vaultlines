@@ -422,3 +422,89 @@ def test_plugin_projects_follow_the_nearest_settings_file(world):
     # A broken settings file turns the plugin off.
     (world.api / ".claude" / "settings.json").write_text("{nope")
     assert plugin_projects(str(world.api)) == []
+
+
+# ---------------------------------------------------------------- vl's own files and commands
+
+def _vl_world(world, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(world.home / ".config"))
+    world.runtime["config"] = str(world.home / ".config" / "vaultlines" / "config.toml")
+    return world.home / ".local" / "state" / "vaultlines", world.home / ".config" / "vaultlines"
+
+
+def test_vl_records_can_never_be_written(world, monkeypatch):
+    state, _ = _vl_world(world, monkeypatch)
+    monkeypatch.setenv("XDG_STATE_HOME", str(world.home / ".local" / "state"))
+    s = Session(world, world.site)
+    s.event({"hook_event_name": "UserPromptSubmit", "prompt": "please fix vl for me"})
+    for path in (state / "runtime.json", state / "sessions" / "s1.json"):
+        out = s.call("Write", file_path=str(path), content="{}")
+        assert decision(out) == "deny"
+        assert "can only be changed by vl" in reason(out)
+    assert decision(s.call("Read", file_path=str(state / "runtime.json"))) is None
+
+
+def test_vl_commands_and_config_ask_unless_you_asked(world, monkeypatch):
+    _, config = _vl_world(world, monkeypatch)
+    s = Session(world, world.site)
+    s.event({"hook_event_name": "UserPromptSubmit", "prompt": "update the notes"})
+    for tool, args in (("Bash", {"command": "vl folder set . --reads acme-founders"}),
+                       ("Bash", {"command": "cd /tmp && ~/.local/bin/vl uninstall"}),
+                       ("Bash", {"command": "cat ~/.config/vaultlines/config.toml"}),
+                       ("Bash", {"command": "echo '{\"disableAllHooks\": true}' > .claude/settings.json"}),
+                       ("Edit", {"file_path": str(config / "config.toml"), "old_string": "a", "new_string": "b"})):
+        assert decision(s.call(tool, **args)) == "ask", args
+    assert "Mention vl in your message" in reason(s.call("Bash", command="vl apply"))
+    for harmless in ("vl status", "vl doctor", "vl sync", "vl check", "echo evaluate this"):
+        assert s.call("Bash", command=harmless) is None, harmless
+
+    s.event({"hook_event_name": "UserPromptSubmit", "prompt": "Run VL apply please"})
+    assert s.call("Bash", command="vl folder set . --reads acme-founders") is None
+    assert s.call("Edit", file_path=str(config / "config.toml"), old_string="a", new_string="b") is None
+    s.event({"hook_event_name": "UserPromptSubmit", "prompt": "thanks, now the README"})
+    assert decision(s.call("Bash", command="vl apply")) == "ask"
+
+
+def test_you_asked_doesnt_skip_leak_checks(world, monkeypatch):
+    _vl_world(world, monkeypatch)
+    s = Session(world, world.acme)
+    s.event({"hook_event_name": "UserPromptSubmit", "prompt": "use vl to copy the plan"})
+    s.call("Read", file_path=world.vault("acme-founders", "plan.md"))
+    out = s.call("Bash", command=f"cp ~/Vaults/acme-founders/plan.md {world.vault('acme-everyone')}/ && vl sync")
+    assert decision(out) == "ask"
+    assert "ana would see this" in reason(out)
+
+
+def test_guard_and_leak_reasons_combine(world, monkeypatch):
+    _vl_world(world, monkeypatch)
+    s = Session(world, world.acme)
+    s.call("Read", file_path=world.vault("acme-founders", "plan.md"))
+    out = s.call("Bash", command="cp ~/Vaults/acme-founders/p.md ~/Vaults/acme-everyone/ && vl apply")
+    assert decision(out) == "ask"
+    assert "vl apply" in reason(out) and "ana would see this" in reason(out)
+
+
+def test_settings_edits_that_switch_vl_off_ask(world, monkeypatch):
+    import json
+
+    _vl_world(world, monkeypatch)
+    settings = world.home / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    ours = {"hooks": {"PreToolUse": [{"matcher": "x", "hooks": [{"type": "command", "command": "/u/.local/bin/vl hook"}]}]}}
+    settings.write_text(json.dumps(ours))
+    s = Session(world, world.blog)
+    assert decision(s.call("Write", file_path=str(settings), content=json.dumps({"model": "opus"}))) == "ask"
+    assert decision(s.call("Write", file_path=str(settings), content=json.dumps({**ours, "disableAllHooks": True}))) == "ask"
+    assert s.call("Write", file_path=str(settings), content=json.dumps({**ours, "model": "opus"})) is None
+    assert decision(s.call("Edit", file_path=str(settings), old_string='"command": "/u/.local/bin/vl hook"',
+                           new_string='"command": "true"')) == "ask"
+    assert decision(s.call("MultiEdit", file_path=str(world.blog / ".claude" / "settings.local.json"),
+                           edits=[{"old_string": "{", "new_string": '{"disableAllHooks": true,'}])) == "ask"
+    assert s.call("Edit", file_path=str(settings), old_string="opus", new_string="sonnet") is None
+
+
+def test_prompt_before_any_session_record(world):
+    out, state = decide({"hook_event_name": "UserPromptSubmit", "session_id": "new", "cwd": str(world.site),
+                         "prompt": "vl status?"}, world.runtime, None, str(world.site))
+    assert out is None
+    assert state["asked_vl"] is True and state["label"] == []

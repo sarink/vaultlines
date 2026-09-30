@@ -12,6 +12,9 @@ The rules, for a session in folder F (the closest listed parent of where it star
    can see V couldn't see everything the session read.
 4. Writes to a `reads` vault always ask.
 5. Reads are recorded here, before the call runs.
+6. vl itself: writes to its records are blocked; changes to its config, its hooks,
+   or `vl` commands that change what it allows ask, unless your latest message
+   mentions vl (UserPromptSubmit records that).
 
 `decide()` is pure. `main()` does the I/O. Only the standard library is imported,
 plus label.py and the Basic Memory adapter tables.
@@ -264,11 +267,128 @@ def _leak_reason(state: dict, runtime: dict, target: str, people: list[str], ext
     return f"{first} {lbl.names(people)} {verb} see this in {target}."
 
 
+# ---------------------------------------------------------------- vl's own files
+
+VL_COMMAND_RE = re.compile(r"(?:^|[\s;&|(`])(?:\S*/)?vl\s+(init|apply|uninstall|folder|vault)\b")
+
+
+def _config_dir(runtime: dict) -> str:
+    config = runtime.get("config")
+    if config:
+        return os.path.realpath(os.path.dirname(config))
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(_home(), ".config")
+    return os.path.realpath(os.path.join(base, "vaultlines"))
+
+
+def _has_vl_hook(data) -> bool:
+    if not isinstance(data, dict) or not isinstance(data.get("hooks"), dict):
+        return False
+    return any(re.search(r"(?:^|/|\s)vl['\"]?\s+hook\s*$", str(h.get("command", "")))
+               for groups in data["hooks"].values() if isinstance(groups, list)
+               for g in groups if isinstance(g, dict)
+               for h in g.get("hooks", []) if isinstance(h, dict))
+
+
+def _settings_change(path: str, tool: str, args: dict) -> str | None:
+    """Why an edit to a Claude Code settings file would switch vl off, or None."""
+    if os.path.basename(path) not in ("settings.json", "settings.local.json") \
+            or os.path.basename(os.path.dirname(path)) != ".claude":
+        return None
+    if tool == "Write":
+        try:
+            new = json.loads(args.get("content") or "")
+        except ValueError:
+            new = None
+        try:
+            old = json.loads(Path(path).read_text())
+        except (OSError, ValueError):
+            old = None
+        if isinstance(new, dict) and new.get("disableAllHooks") is True:
+            return "It turns on disableAllHooks, which switches vl off."
+        if _has_vl_hook(old) and not _has_vl_hook(new):
+            return "It removes vl's hooks."
+        return None
+    edits = args.get("edits") if tool == "MultiEdit" else [args]
+    for e in edits if isinstance(edits, list) else []:
+        old, new = str(e.get("old_string", "")), str(e.get("new_string", ""))
+        if "disableAllHooks" in new:
+            return "It changes disableAllHooks, which can switch vl off."
+        if re.search(r"vl['\"]?\s+hook", old) and not re.search(r"vl['\"]?\s+hook", new):
+            return "It removes vl's hooks."
+    return None
+
+
+def self_guard(event: dict, runtime: dict) -> tuple[str, str] | None:
+    """Stop Claude from quietly loosening vl itself: its config, its records, its hooks."""
+    tool = event.get("tool_name") or ""
+    args = event.get("tool_input") or {}
+    cwd = event.get("cwd") or os.getcwd()
+    state = os.path.realpath(str(state_dir()))
+    config = _config_dir(runtime)
+    if tool in WRITE_TOOLS:
+        path = args.get(WRITE_TOOLS[tool])
+        if not isinstance(path, str) or not path:
+            return None
+        p = _abs(path, cwd)
+        if inside(p, state):
+            return "deny", "vl's session records and hook data can only be changed by vl."
+        if inside(p, config):
+            return "ask", "This edits vl's config. Changes take effect after `vl apply`."
+        why = _settings_change(p, tool, args)
+        return ("ask", f"This Claude Code settings change affects vl. {why}") if why else None
+    if tool == "Bash" and isinstance(args.get("command"), str):
+        command = args["command"]
+        homes = {_home(), os.path.realpath(_home())}
+        for d in (state, config):
+            forms = [d] + [f"{pre}/{d[len(h) + 1:]}" for h in homes if inside(d, h) and d != h
+                           for pre in ("~", "$HOME", "${HOME}")]
+            if any(f in command for f in forms):
+                return "ask", "This command touches vl's own files (its config or session records)."
+        m = VL_COMMAND_RE.search(command)
+        if m:
+            return "ask", f"This runs `vl {m.group(1)}`, which changes what vl allows. (Mention vl in your message to skip this question.)"
+        if "disableAllHooks" in command:
+            return "ask", "This command mentions disableAllHooks, which can switch vl off."
+    return None
+
+
+ASKED_VL_RE = re.compile(r"\b(vl|vaultlines)\b", re.IGNORECASE)
+
+
+def _unknown_session(runtime: dict, project_dir: str) -> dict:
+    key, _ = folder_entry(runtime, project_dir)
+    state = lbl.new_session(key, lbl.ONLY_YOU, "unknown")
+    state["why"] = "vl has no record of how it started"
+    return state
+
+
+def _prompt(event: dict, runtime: dict, state: dict | None, project_dir: str) -> dict:
+    """Remember whether your latest message is about vl. Only you can set this: it comes
+    from what you type, and Claude can't write to the session record."""
+    state = dict(state) if state is not None else _unknown_session(runtime, project_dir)
+    state["asked_vl"] = bool(ASKED_VL_RE.search(str(event.get("prompt") or "")))
+    return state
+
+
 def _pre_tool(event: dict, runtime: dict, state: dict | None, project_dir: str):
+    guard = self_guard(event, runtime)
+    if guard and guard[0] == "deny":
+        return _pre("deny", guard[1]), None
+    if guard and state and state.get("asked_vl"):
+        guard = None  # you asked for this in your latest message
+    out, new_state = _vault_rules(event, runtime, state, project_dir)
+    if not guard:
+        return out, new_state
+    fields = (out or {}).get("hookSpecificOutput", {})
+    if fields.get("permissionDecision") == "deny":
+        return out, new_state
+    reason = " ".join(filter(None, [guard[1], fields.get("permissionDecisionReason", "").removeprefix("vl: ")]))
+    return _pre("ask", reason, fields.get("updatedInput")), new_state
+
+
+def _vault_rules(event: dict, runtime: dict, state: dict | None, project_dir: str):
     if state is None:
-        key, _ = folder_entry(runtime, project_dir)
-        state = lbl.new_session(key, lbl.ONLY_YOU, "unknown")
-        state["why"] = "vl has no record of how it started"
+        state = _unknown_session(runtime, project_dir)
     folders = runtime.get("folders", {})
     folder = folders.get(state.get("folder")) if state.get("folder") else None
     try:
@@ -325,6 +445,8 @@ def decide(event: dict, runtime: dict, state: dict | None, project_dir: str = ""
         return _session_start(event, runtime, state, project_dir, list(briefing))
     if name == "PreToolUse":
         return _pre_tool(event, runtime, state, project_dir)
+    if name == "UserPromptSubmit":
+        return None, _prompt(event, runtime, state, project_dir)
     return None, None
 
 
@@ -411,7 +533,7 @@ def _may_touch_vault(event: dict, runtime: dict | None) -> bool:
 def run(event: dict, env: dict | None = None) -> dict | None:
     env = os.environ if env is None else env
     name = event.get("hook_event_name")
-    if name not in ("SessionStart", "PreToolUse"):
+    if name not in ("SessionStart", "PreToolUse", "UserPromptSubmit"):
         return None
     path = runtime_path()
     if not path.exists():  # vl isn't set up: only Basic Memory calls might reach a vault

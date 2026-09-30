@@ -52,7 +52,8 @@ def test_hooks_install_remove_and_keep_others(tmp_path):
     assert pre[0] == {"matcher": "Bash", "hooks": [theirs]}
     assert pre[1]["matcher"] == MATCHER
     assert data["hooks"]["SessionStart"][0]["hooks"][0]["command"] == "/opt/vl/bin/vl hook"
-    assert claude.hooks_installed(path) == ["SessionStart", "PreToolUse"]
+    assert claude.hooks_installed(path) == ["SessionStart", "UserPromptSubmit", "PreToolUse"]
+    assert data["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"] == "/opt/vl/bin/vl hook"
 
     assert install_hooks(path, "'/Users/me/new place/vl' hook") is True  # moved: replaced, not added
     assert len(json.loads(path.read_text())["hooks"]["PreToolUse"]) == 2

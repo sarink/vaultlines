@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 
@@ -39,7 +40,7 @@ class World:
             "me": ME,
             "on_leak": "ask",
             "vaults": {name: {"paths": [str(self.vaults / name)], "show": f"~/Vaults/{name}",
-                              "audience": {"logins": [], "reason": "", **aud}}
+                              "audience": {"logins": [], "reason": "", **copy.deepcopy(aud)}}
                        for name, aud in PEOPLE.items()},
             "folders": {
                 str(self.home): {"writes": "personal", "reads": ["docs"]},
