@@ -62,7 +62,8 @@ echo "== alice: init, two team vaults, two folders"
 vl alice init --local >/dev/null
 CONFIG="$ROOT/alice/.config/vaultlines/config.toml"
 check "init lists ~ with the personal vault" grep -q '^\[folders."~"\]' "$CONFIG"
-check "init turns the Basic Memory adapter on" grep -q '^\[adapters.basic-memory\]' "$CONFIG"
+check "init turns the Basic Memory plugin on" grep -q '^\[plugins.basic-memory\]' "$CONFIG"
+check "  ...with its kind" grep -q '^kind = "basic-memory"$' "$CONFIG"
 check "hooks installed for SessionStart and PreToolUse" \
   jq -e '[.hooks.SessionStart[].hooks[].command, .hooks.PreToolUse[].hooks[].command] | map(endswith("vl hook")) | all and length == 2' "$ROOT/alice/.claude/settings.json"
 check "  ...and UserPromptSubmit" jq -e '.hooks.UserPromptSubmit[0].hooks[0].command | endswith("vl hook")' "$ROOT/alice/.claude/settings.json"
@@ -84,7 +85,7 @@ check "settings.local.json kept out of git" test -z "$(git -C "$LEGAL" status --
 check "no per-folder servers any more" test -z "$(folder_servers alice "$LEGAL")"
 check "runtime.json has the folders" jq -e --arg l "$LEGAL" '.folders[$l] == {"writes": "acme-founders", "reads": ["acme-everyone"]}' <(runtime alice)
 check "runtime.json has who can see each vault" jq -e '.vaults["acme-founders"].audience.logins == ["alice", "carol"] and .me == "alice"' <(runtime alice)
-check "runtime.json maps Basic Memory projects to vaults" jq -e '.basic_memory.projects["acme-everyone"] == "acme-everyone"' <(runtime alice)
+check "runtime.json maps Basic Memory projects to vaults" jq -e '.plugins["basic-memory"].data.projects["acme-everyone"] == "acme-everyone"' <(runtime alice)
 
 snapshot() { jq -S '{m: .mcpServers, p: (.projects // {} | map_values(.mcpServers))}' "$ROOT/alice/.claude/.claude.json"; cat "$ROOT/alice/.claude/settings.json" "$LEGAL/.claude/settings.local.json"; }
 BEFORE="$(snapshot)"
@@ -205,6 +206,12 @@ refuses "can't remove a vault a folder still uses" vl alice vault remove acme-fo
 vl bob vault remove acme-everyone >/dev/null
 check "remove kept the files" test -f "$ROOT/bob/Vaults/acme-everyone/notes/From bob.md"
 check "doctor passes for alice" vl alice doctor
+sed '/^\[plugins.basic-memory\]/,/^$/d' "$CONFIG" > "$CONFIG.tmp" && mv "$CONFIG.tmp" "$CONFIG"
+vl alice apply >/dev/null
+check "turning the plugin off removes its folder blocks" jq -e '.basicMemory == null' "$LEGAL/.claude/settings.local.json"
+check "  ...and the user-level one" jq -e '.basicMemory == null' "$ROOT/alice/.claude/settings.json"
+check "  ...and its runtime entry" jq -e '.plugins == {}' <(runtime alice)
+check "  ...and doctor still passes" vl alice doctor
 vl alice uninstall >/dev/null
 check "uninstall removed the hooks" jq -e '.hooks == null' "$ROOT/alice/.claude/settings.json"
 refuses "  ...so doctor fails" vl alice doctor

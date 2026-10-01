@@ -9,20 +9,21 @@ import json
 import time
 from pathlib import Path
 
+from . import plugins
 from .audience import Audience
 from .config import Config, config_path
+from .hook import RUNTIME_VERSION
 from .util import contract, read_json, state_dir, write_json
 
-VERSION = 1
+VERSION = RUNTIME_VERSION
 
 
 def path() -> Path:
     return state_dir() / "runtime.json"
 
 
-def build(cfg: Config, auds: dict[str, Audience], me: str,
-          bm_projects: dict[str, Path] | None, plugin: bool) -> dict:
-    """`bm_projects` is every Basic Memory project (name -> folder), or None if the adapter is off."""
+def build(cfg: Config, auds: dict[str, Audience], me: str, plugin_data: dict[str, dict]) -> dict:
+    """`plugin_data` is each plugin's `data()`, by plugin name."""
     vaults = {}
     for name, v in sorted(cfg.vaults.items()):
         a = auds.get(name)
@@ -32,8 +33,7 @@ def build(cfg: Config, auds: dict[str, Audience], me: str,
             "audience": ({"kind": a.kind, "logins": list(a.logins), "reason": a.reason} if a
                          else {"kind": "unknown", "reason": "not checked yet"}),
         }
-    by_path = {str(v.path): name for name, v in cfg.vaults.items()}
-    data = {
+    return {
         "version": VERSION,
         "written_at": time.time(),
         "config": str(config_path()),
@@ -41,14 +41,11 @@ def build(cfg: Config, auds: dict[str, Audience], me: str,
         "on_leak": cfg.on_leak,
         "vaults": vaults,
         "folders": {f.path: {"writes": f.writes, "reads": f.reads} for f in cfg.listed()},
-        "basic_memory": None,
+        "plugins": {name: {"kind": cfg.plugins[name]["kind"],
+                           "tool_prefixes": list(getattr(plugins.KINDS[cfg.plugins[name]["kind"]], "TOOL_PREFIXES", ())),
+                           "data": d}
+                    for name, d in sorted(plugin_data.items())},
     }
-    if bm_projects is not None:
-        data["basic_memory"] = {
-            "plugin": plugin,
-            "projects": {p: by_path.get(str(folder)) for p, folder in sorted(bm_projects.items())},
-        }
-    return data
 
 
 def write(data: dict) -> None:

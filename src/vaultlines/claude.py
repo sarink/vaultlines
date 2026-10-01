@@ -3,7 +3,7 @@
 vaultlines owns only these things, so it can rewrite them safely:
   - hooks whose command is `vl hook`
   - the "basicMemory" block (read by the Basic Memory plugin) in listed folders
-  - the one user-level MCP server named "basic-memory", when the adapter is on
+  - the one user-level MCP server named "basic-memory", when the Basic Memory plugin is on
 It also removes what vaultlines 0.2 left behind: "vl-*" servers and "mcp__vl-*" rules.
 """
 
@@ -17,8 +17,6 @@ from pathlib import Path
 
 from .util import home, read_json, run, write_json
 
-MARKETPLACE = "https://github.com/basicmachines-co/basic-memory.git"
-PLUGIN = "basic-memory@basicmachines-co"
 V2_PREFIX = "vl-"
 HOOK_EVENTS = ("SessionStart", "UserPromptSubmit", "PreToolUse")
 HOOK_TIMEOUT = 10
@@ -84,18 +82,7 @@ def remove_server(name: str, scope: str, cwd: str | None = None) -> None:
     run(["claude", "mcp", "remove", "-s", scope, name], cwd=cwd, check=False)
 
 
-# ---------------------------------------------------------------- the Basic Memory plugin
-
-def install_plugin() -> None:
-    run(["claude", "plugin", "marketplace", "add", MARKETPLACE,
-         "--sparse", ".claude-plugin", "plugins/claude-code", "--scope", "user"])
-    run(["claude", "plugin", "install", PLUGIN, "--scope", "user"])
-
-
-def plugin_installed() -> bool:
-    result = run(["claude", "plugin", "list"], check=False)
-    return PLUGIN in result.stdout
-
+# ---------------------------------------------------------------- settings files
 
 def _is_v2_rule(rule: str) -> bool:
     return rule.startswith(f"mcp__{V2_PREFIX}")

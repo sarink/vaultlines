@@ -11,16 +11,14 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import __version__, audience, claude, config, gitsync, launchd, obsidian, runtime
+from . import __version__, audience, claude, config, gitsync, launchd, obsidian, plugins, runtime
 from . import label as lbl
-from .adapters import basic_memory as bm
 from .audience import Audience
 from .config import NAME_RE, Config, Folder, Vault, folder_for, show
 from .util import (
     VlError,
     contract,
     expand,
-    home,
     notify,
     read_json,
     say,
@@ -51,11 +49,6 @@ def _check_owner_repo(owner_repo: str) -> None:
         raise VlError(f"--github takes OWNER/REPO, like acme/acme-notes, not {owner_repo}")
 
 
-def _register(cfg: Config, name: str, path: Path) -> None:
-    if cfg.basic_memory:
-        bm.ensure_project(cfg, name, path)
-
-
 def create_vault(cfg: Config, name: str, github: str | None, local: bool, path: str | None) -> Vault:
     _check_new_name(cfg, name)
     vault_path = expand(path) if path else cfg.vaults_dir / name
@@ -73,7 +66,6 @@ def create_vault(cfg: Config, name: str, github: str | None, local: bool, path: 
     if github:
         say(f"Creating private GitHub repo {github}")
         url = gitsync.create_github_repo(vault_path, github)
-    _register(cfg, name, vault_path)
     cfg.vaults[name] = Vault(name, vault_path, url)
     say(f"Created vault '{name}' at {contract(vault_path)}" + (f", synced to {url}" if url else ", on this computer only"))
     return cfg.vaults[name]
@@ -97,7 +89,6 @@ def cmd_vault_join(args) -> None:
     if gitsync.git(path, "rev-parse", "--verify", "-q", "HEAD", check=False).returncode != 0:
         gitsync.init_repo(path)  # an empty repo: this is the first computer to use it
     gitsync.ensure_identity(path)
-    _register(cfg, name, path)
     cfg.vaults[name] = Vault(name, path, args.url)
     config.save(cfg)
     say(f"Joined vault '{name}' at {contract(path)}")
@@ -131,7 +122,6 @@ def cmd_vault_adopt(args) -> None:
                 url = gitsync.github_url("/".join(gitsync.parse_github(origin)))
             except VlError:
                 raise VlError(f"{contract(path)} syncs to {origin}. vaultlines only supports GitHub remotes.") from None
-    _register(cfg, name, path)
     cfg.vaults[name] = Vault(name, path, url)
     config.save(cfg)
     say(f"Adopted {contract(path)} as vault '{name}'" + (f", synced to {url}" if url else ", on this computer only"))
@@ -146,8 +136,9 @@ def cmd_vault_remove(args) -> None:
         raise VlError(f"These folders still use '{vault.name}': {', '.join(show(f) for f in sorted(used))}. "
                       "Change them with `vl folder set` or `vl folder unset` first.")
     del cfg.vaults[vault.name]
-    if cfg.basic_memory:
-        bm.remove_project(cfg, vault.name)
+    for _, plugin, settings in plugins.configured(cfg):
+        if hasattr(plugin, "vault_removed"):
+            plugin.vault_removed(cfg, settings, vault.name)
     config.save(cfg)
     if args.delete_files:
         shutil.rmtree(vault.path)
@@ -225,44 +216,6 @@ class Applied:
     errors: list[str] = field(default_factory=list)  # vaults GitHub couldn't be asked about
 
 
-def plugin_targets(cfg: Config) -> dict[str, Folder]:
-    """Settings file -> the folder whose writes vault the Basic Memory plugin should use there.
-
-    Folders that hold your home folder ("~", "/") are covered by the user-level block,
-    which the plugin reads everywhere a closer settings file doesn't override it.
-    """
-    if not cfg.basic_memory:
-        return {}
-    me = str(home().resolve())
-    targets = {}
-    top = folder_for(cfg, me)
-    if top:
-        targets[str(claude.plugin_user_settings_path())] = top
-    for f in cfg.listed():
-        if not (f.path == me or me.startswith(f.path.rstrip("/") + "/")):
-            targets[str(claude.folder_settings_path(f.path))] = f
-    return targets
-
-
-def _plugin_blocks(cfg: Config, before: list[str], warnings: list[str]) -> list[str]:
-    """Point the Basic Memory plugin at each listed folder's writes vault; remove old blocks.
-
-    Returns the settings files that now hold a block.
-    """
-    wanted = plugin_targets(cfg)
-    for old in before:
-        if old not in wanted and Path(old).exists():
-            claude.update_settings(Path(old), None)
-    for path, f in wanted.items():
-        if not Path(f.path).is_dir():
-            warnings.append(f"folder {contract(f.path)} is missing")
-            continue
-        claude.update_settings(Path(path), bm.plugin_block(f.writes))
-        if path != str(claude.plugin_user_settings_path()):
-            claude.git_ignore_local_settings(f.path)
-    return sorted(wanted)
-
-
 def _remove_v2(cfg: Config, warnings: list[str]) -> None:
     """Remove the vl-* servers and mcp__vl-* rules vaultlines 0.2 added."""
     listed = {f.path for f in cfg.listed()}
@@ -283,40 +236,41 @@ def _remove_v2(cfg: Config, warnings: list[str]) -> None:
 
 def write_runtime(cfg: Config, fresh: bool) -> tuple[dict[str, Audience], list[str]]:
     auds, errors = audience.audiences(cfg, fresh=fresh)
-    projects = bm.projects(cfg) if cfg.basic_memory else None
-    plugin = claude.plugin_installed() if cfg.basic_memory else False
-    runtime.write(runtime.build(cfg, auds, audience.cached_me(), projects, plugin))
+    data = {name: plugin.data(cfg, settings) if hasattr(plugin, "data") else {}
+            for name, plugin, settings in plugins.configured(cfg)}
+    runtime.write(runtime.build(cfg, auds, audience.cached_me(), data))
     return auds, errors
 
 
 def _apply(cfg: Config, fresh: bool = True) -> Applied:
-    """Make git, Basic Memory, Claude Code and Obsidian match the config."""
+    """Make git, the plugins, Claude Code and Obsidian match the config."""
     warnings: list[str] = []
-    current = bm.projects(cfg) if cfg.basic_memory else {}
     for v in cfg.vaults.values():
         if not v.path.exists():
             warnings.append(f"vault '{v.name}': folder {contract(v.path)} is missing")
             continue
         if not gitsync.is_repo(v.path):
             gitsync.init_repo(v.path)
-        if cfg.basic_memory:
-            bm.ensure_project(cfg, v.name, v.path, current)
 
-    if cfg.basic_memory:
-        argv = bm.mcp_argv(cfg)
-        server = claude.user_servers().get(bm.SERVER)
-        if server is None or not claude.same_server(server, argv):
-            claude.add_server(bm.SERVER, argv, "user")
-        top = folder_for(cfg, home())
-        if top and top.writes in current:
-            bm.set_default(cfg, top.writes)
     _remove_v2(cfg, warnings)
-    blocks = _plugin_blocks(cfg, audience.load_state().get("plugin_blocks", []), warnings)
+    saved = audience.load_state().get("plugins", {})
+    plugin_state = {}
+    for name, plugin, settings in plugins.configured(cfg):
+        before = saved.get(name, {})
+        if before.get("kind") != settings["kind"]:
+            _plugin_off(name, before, warnings)
+            before = {}
+        new = plugin.apply(cfg, settings, before.get("state", {}), warnings) if hasattr(plugin, "apply") else None
+        plugin_state[name] = {"kind": settings["kind"], "state": new or {}}
+    for name, before in saved.items():
+        if name not in cfg.plugins:
+            _plugin_off(name, before, warnings)
     claude.install_hooks()
 
     _, errors = write_runtime(cfg, fresh)
     state = audience.load_state()
-    state["plugin_blocks"] = blocks
+    state.pop("plugin_blocks", None)  # kept by vl 0.3.0, before plugins
+    state["plugins"] = plugin_state
     if fresh and not errors:
         state["checked_at"] = time.time()
     audience.save_state(state)
@@ -336,6 +290,13 @@ def _apply(cfg: Config, fresh: bool = True) -> Applied:
     for e in errors:
         warn(e)
     return Applied(errors)
+
+
+def _plugin_off(name: str, saved: dict, warnings: list[str]) -> None:
+    """Undo what a plugin set up, once it's gone from the config."""
+    plugin = plugins.KINDS.get(saved.get("kind"))
+    if plugin and hasattr(plugin, "off"):
+        plugin.off(saved.get("state", {}), warnings)
 
 
 def cmd_apply(args) -> None:
@@ -379,16 +340,13 @@ def cmd_init(args) -> None:
     if args.interval:
         cfg.sync_interval = args.interval
     if args.no_basic_memory:
-        cfg.adapters.pop("basic-memory", None)
+        cfg.plugins = {name: p for name, p in cfg.plugins.items() if p["kind"] != "basic-memory"}
     elif new:
-        cfg.adapters["basic-memory"] = {}
+        cfg.plugins["basic-memory"] = {"kind": "basic-memory"}
 
-    if cfg.basic_memory:
-        say("Configuring Basic Memory")
-        bm.configure(cfg)
-        if not claude.plugin_installed():
-            say("Installing the Basic Memory plugin for Claude Code")
-            claude.install_plugin()
+    for _, plugin, settings in plugins.configured(cfg):
+        if hasattr(plugin, "init"):
+            plugin.init(cfg, settings)
 
     home_key = str(expand("~"))
     if home_key not in cfg.folders:
@@ -572,9 +530,9 @@ def cmd_doctor(args) -> None:
 
     say("Tools")
     needs_gh = any(v.remote for v in cfg.vaults.values())
-    for tool in ("git", "uvx", "claude", "gh"):
+    for tool in ("git", "claude", "gh"):
         found = shutil.which(tool)
-        optional = (tool == "gh" and not needs_gh) or (tool == "uvx" and not cfg.basic_memory)
+        optional = tool == "gh" and not needs_gh
         check(bool(found) or optional, f"{tool}: {found or ('not found (not needed)' if optional else 'not found')}")
     say("Vaults")
     for v in cfg.vaults.values():
@@ -584,19 +542,9 @@ def cmd_doctor(args) -> None:
             origin is not None and v.remote is not None and gitsync.repo_key(origin) == gitsync.repo_key(v.remote))
         check(same, f"vault '{v.name}' syncs to the remote in the config ({v.remote or 'none'})",
               f"git remote is {origin or 'none'}; fix one of them")
-    if cfg.basic_memory:
-        say("Basic Memory")
-        check(bm.setting(cfg, "disable_permalinks").lower().endswith("true"), "permalinks off", "vl init")
-        projects = bm.projects(cfg)
-        for v in cfg.vaults.values():
-            check(projects.get(v.name) == v.path, f"vault '{v.name}' is a Basic Memory project", "vl apply")
-        server = claude.user_servers().get(bm.SERVER)
-        check(server is not None and claude.same_server(server, bm.mcp_argv(cfg)),
-              f"one '{bm.SERVER}' server for every vault", "vl apply")
-        check(claude.plugin_installed(), "Basic Memory plugin installed", "vl init")
-        for path, f in plugin_targets(cfg).items():
-            block = read_json(Path(path), {}).get("basicMemory") or {}
-            check(block.get("primaryProject") == f.writes, f"{contract(path)}: plugin writes to {f.writes}", "vl apply")
+    for _, plugin, settings in plugins.configured(cfg):
+        if hasattr(plugin, "doctor"):
+            plugin.doctor(cfg, settings, check)
     say("Claude Code")
     hooks = claude.hooks_installed()
     for event in claude.HOOK_EVENTS:

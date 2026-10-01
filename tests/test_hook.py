@@ -5,7 +5,8 @@ from __future__ import annotations
 import os
 
 from vaultlines import label as lbl
-from vaultlines.hook import bash_vaults, decide, plugin_projects, vault_of
+from vaultlines.hook import bash_vaults, decide, vault_of
+from vaultlines.plugins.basic_memory import plugin_projects
 
 
 class Session:
@@ -258,9 +259,18 @@ def test_unlisted_folder_outside_home_has_no_vaults(world, tmp_path):
 
 def test_session_start_context(world):
     ctx = Session(world, world.site).last["hookSpecificOutput"]["additionalContext"]
-    assert 'project="acme-everyone"' in ctx
-    assert "~/Vaults/acme-everyone" in ctx
-    assert "You can also read: acme-slack" in ctx
+    assert ctx == ('vaultlines: save notes from this folder to the `acme-everyone` vault (Basic Memory '
+                   'project="acme-everyone", folder ~/Vaults/acme-everyone). You can also read: acme-slack. '
+                   'Writing to those asks first. Other vaults are blocked here. '
+                   'Always pass project="..." to Basic Memory tools.')
+
+
+def test_session_start_context_without_plugins(world):
+    world.runtime["plugins"] = {}
+    ctx = Session(world, world.site).last["hookSpecificOutput"]["additionalContext"]
+    assert ctx == ('vaultlines: save notes from this folder to the `acme-everyone` vault '
+                   '(folder ~/Vaults/acme-everyone). You can also read: acme-slack. '
+                   'Writing to those asks first. Other vaults are blocked here.')
 
 
 # ---------------------------------------------------------------- paths
@@ -392,10 +402,26 @@ def test_bm_without_a_folder(world, tmp_path):
     assert "No vaults are set up" in reason(s.bm("search_notes", query="x"))
 
 
-def test_bm_adapter_off_lets_calls_through(world):
-    world.runtime["basic_memory"] = None
+def test_bm_plugin_off_lets_calls_through(world):
+    world.runtime["plugins"] = {}
     s = Session(world, world.blog)
     assert s.bm("read_note", identifier="x", project="acme-founders") is None
+
+
+def test_runtime_from_another_version_blocks_basic_memory(world):
+    from conftest import write_runtime
+
+    from vaultlines.hook import run
+
+    world.runtime["version"] = 1
+    write_runtime(world)
+    event = {"hook_event_name": "PreToolUse", "session_id": "v1", "cwd": str(world.acme),
+             "tool_name": "mcp__basic-memory__read_note", "tool_input": {"identifier": "x", "project": "acme-founders"}}
+    out = run(event, env={})
+    assert decision(out) == "deny"
+    assert "vl apply" in reason(out)
+    # Calls that can't touch a vault still go through.
+    assert run({**event, "cwd": str(world.blog), "tool_name": "Read", "tool_input": {"file_path": "x.md"}}, env={}) is None
 
 
 # ---------------------------------------------------------------- the plugin's briefing

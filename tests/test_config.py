@@ -29,7 +29,8 @@ writes    = "side"
 reads     = ["acme-everyone"]
 auto_pull = true
 
-[adapters.basic-memory]
+[plugins.basic-memory]
+kind = "basic-memory"
 """
 
 
@@ -49,7 +50,7 @@ def test_load_good_config(cfg_file, tmp_path):
     cfg = config.load()
     assert cfg.vaults["side"].remote is None
     assert cfg.on_leak == "ask"
-    assert cfg.basic_memory and cfg.bm_command == "uvx basic-memory"
+    assert cfg.plugins == {"basic-memory": {"kind": "basic-memory"}}
     f = cfg.folders[str(tmp_path.resolve())]
     assert (f.writes, f.reads, f.auto_pull) == ("side", ["acme-everyone"], True)
     home = cfg.folders[str(config.expand("~"))]
@@ -63,15 +64,20 @@ def test_round_trip(cfg_file, tmp_path):
     again = config.load()
     assert again.vaults == cfg.vaults
     assert again.folders == cfg.folders
-    assert again.adapters == {"basic-memory": {}}
+    assert again.plugins == {"basic-memory": {"kind": "basic-memory"}}
     text = cfg_file.read_text()
     assert '[folders."~"]' in text
-    assert "[adapters.basic-memory]" in text
+    assert '[plugins.basic-memory]\nkind = "basic-memory"' in text
 
 
-def test_adapter_absent_is_off(cfg_file, tmp_path):
-    write(cfg_file, GOOD.replace("[adapters.basic-memory]\n", ""), tmp_path)
-    assert not config.load().basic_memory
+def test_plugin_absent_is_off(cfg_file, tmp_path):
+    write(cfg_file, GOOD.replace('[plugins.basic-memory]\nkind = "basic-memory"\n', ""), tmp_path)
+    assert config.load().plugins == {}
+
+
+def test_plugin_name_is_free(cfg_file, tmp_path):
+    write(cfg_file, GOOD.replace("[plugins.basic-memory]", "[plugins.memory]"), tmp_path)
+    assert config.load().plugins == {"memory": {"kind": "basic-memory"}}
 
 
 @pytest.mark.parametrize("old, new, message", [
@@ -87,9 +93,12 @@ def test_adapter_absent_is_off(cfg_file, tmp_path):
     ('remote = "https://github.com/acme/acme-everyone"', 'remote = "https://gitlab.com/acme/x.git"', "must be GitHub URLs"),
     ("auto_pull = true", "autopull = true", "unknown key"),
     ("[vaults.side]", "[vaults.Side]", "lowercase"),
-    ("[adapters.basic-memory]", "[adapters.other-memory]", "unknown adapter"),
-    ("[adapters.basic-memory]", '[adapters.basic-memory]\nservers = "x"', "unknown key"),
-    ("[adapters.basic-memory]", '[adapters.basic-memory]\ncommand = ""', "should be a command"),
+    ('kind = "basic-memory"\n', "", "plugins.basic-memory.kind: missing"),
+    ('kind = "basic-memory"', 'kind = "other-memory"', "unknown kind"),
+    ('kind = "basic-memory"', 'kind = "basic-memory"\nservers = "x"', "plugins.basic-memory.servers: unknown key"),
+    ('kind = "basic-memory"', 'kind = "basic-memory"\ncommand = ""', "plugins.basic-memory.command: should be a command"),
+    ('kind = "basic-memory"', 'kind = "basic-memory"\n[plugins.again]\nkind = "basic-memory"', "only one"),
+    ("[plugins.basic-memory]", "[adapters.basic-memory]", "adapters: unknown key"),
 ])
 def test_validation_errors(cfg_file, tmp_path, old, new, message):
     text = GOOD.replace(old, new, 1)

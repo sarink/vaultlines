@@ -35,7 +35,7 @@ class World:
         for name in PEOPLE:
             (self.vaults / name).mkdir(parents=True)
         self.runtime = {
-            "version": 1,
+            "version": 2,
             "written_at": 0,
             "me": ME,
             "on_leak": "ask",
@@ -48,9 +48,12 @@ class World:
                 str(self.site): {"writes": "acme-everyone", "reads": ["acme-slack"]},
                 str(self.side_project): {"writes": "acme-founders", "reads": ["side", "handbook", "acme"]},
             },
-            "basic_memory": {
-                "plugin": True,
-                "projects": {**{name: name for name in PEOPLE}, "main": None},
+            "plugins": {
+                "basic-memory": {
+                    "kind": "basic-memory",
+                    "tool_prefixes": ["mcp__basic-memory__"],
+                    "data": {"plugin": True, "projects": {**{name: name for name in PEOPLE}, "main": None}},
+                },
             },
         }
 

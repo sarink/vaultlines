@@ -17,7 +17,7 @@ The rules, for a session in folder F (the closest listed parent of where it star
    mentions vl (UserPromptSubmit records that).
 
 `decide()` is pure. `main()` does the I/O. Only the standard library is imported,
-plus label.py and the Basic Memory adapter tables.
+plus label.py and the plugins' hook side (see plugins/__init__.py).
 """
 
 from __future__ import annotations
@@ -29,14 +29,17 @@ import sys
 from pathlib import Path
 
 from . import label as lbl
-from .adapters import basic_memory as bm
+from . import plugins
+from .plugins.api import here as _here
 from .util import closest_parent, inside, state_dir
 
 READ_TOOLS = {"Read": "file_path"}
 WRITE_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path", "NotebookEdit": "notebook_path"}
 SEARCH_TOOLS = ("Grep", "Glob")
-MATCHER = "^(Read|Write|Edit|MultiEdit|NotebookEdit|Grep|Glob|Bash|mcp__basic-memory__.*)$"
+MATCHER = "^(" + "|".join(["Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "Grep", "Glob", "Bash",
+                            *(f"{p}.*" for p in plugins.TOOL_PREFIXES)]) + ")$"
 ERROR = "vl hook error: run `vl doctor`."
+RUNTIME_VERSION = 2  # runtime.json's layout
 
 
 class Blocked(Exception):
@@ -166,28 +169,15 @@ def touched(event: dict, runtime: dict, folder: dict | None) -> Call:
                 call.add(v, "read")
                 call.add(v, "write")
                 call.bash = True
-    elif tool.startswith(bm.TOOL_PREFIX) and runtime.get("basic_memory") is not None:
-        projects = runtime["basic_memory"]["projects"]  # project -> vault or None
-        default = None
-        if folder:
-            default = next((p for p, v in projects.items() if v == folder["writes"]), None)
-        access = bm.resolve(tool[len(bm.TOOL_PREFIX):], args, list(projects), default)
+    elif found := plugins.plugin_for_tool(runtime, tool):
+        plugin, data = found
+        access = plugin.on_call(tool, args, folder, data)
         if access.block:
             raise Blocked(access.block)
-        for project in access.projects:
-            vault = projects.get(project)
-            if vault is None:
-                raise Blocked(f"Basic Memory project '{project}' isn't a vault vl knows. {_here(folder)}")
+        for vault in access.vaults:
             call.add(vault, access.kind)
         call.updated_input = access.updated_input
     return call
-
-
-def _here(folder: dict | None) -> str:
-    if not folder:
-        return "No vaults are set up for this folder."
-    reads = folder.get("reads") or []
-    return f"This folder uses {', '.join([folder['writes'], *reads])}."
 
 
 # ---------------------------------------------------------------- decide
@@ -228,7 +218,7 @@ def _session_start(event: dict, runtime: dict, state: dict | None, project_dir: 
             state["why"] = "it was forked" if source == "fork" else f"vl has no record of it before this {source}"
     else:
         state = dict(state)
-    # The Basic Memory plugin's briefing puts notes from these vaults into the session.
+    # Plugins (like Basic Memory's briefing) put notes from these vaults into the session.
     label = lbl.from_json(state["label"])
     read = list(state.get("read", []))
     for vault in briefing:
@@ -243,12 +233,16 @@ def _session_start(event: dict, runtime: dict, state: dict | None, project_dir: 
     w = folder["writes"]
     reads = folder.get("reads") or []
     where = runtime["vaults"].get(w, {}).get("show", "")
-    bm_on = runtime.get("basic_memory") is not None
-    lines = [f"vaultlines: save notes from this folder to the `{w}` vault"
-             + (f" (Basic Memory project=\"{w}\", folder {where})." if bm_on else f" (folder {where}).")]
+    inline, extra = [], []
+    for _, plugin, data in plugins.enabled(runtime):
+        if hasattr(plugin, "briefing"):
+            i, e = plugin.briefing(w, data)
+            inline.append(i)
+            extra.append(e)
+    lines = [f"vaultlines: save notes from this folder to the `{w}` vault ({', '.join([*inline, f'folder {where}'])})."]
     if reads:
         lines.append(f"You can also read: {', '.join(reads)}. Writing to those asks first.")
-    lines.append("Other vaults are blocked here." + (" Always pass project=\"...\" to Basic Memory tools." if bm_on else ""))
+    lines.append(" ".join(["Other vaults are blocked here.", *extra]))
     return _output("SessionStart", additionalContext=" ".join(lines)), state
 
 
@@ -450,63 +444,6 @@ def decide(event: dict, runtime: dict, state: dict | None, project_dir: str = ""
     return None, None
 
 
-# ---------------------------------------------------------------- the Basic Memory plugin's briefing
-
-def _settings_block(path: Path) -> tuple[dict | None, bool]:
-    """(block, counts) like the plugin: a missing file or key doesn't count; a broken one does."""
-    try:
-        data = json.loads(path.read_text())
-    except FileNotFoundError:
-        return None, False
-    except (OSError, ValueError):
-        return None, True
-    if not isinstance(data, dict):
-        return None, True
-    if "basicMemory" not in data:
-        return None, False
-    block = data["basicMemory"]
-    return (block if isinstance(block, dict) else None), True
-
-
-def plugin_projects(project_dir: str) -> list[str]:
-    """The projects the Basic Memory plugin briefs from, found the way the plugin finds them:
-    ~/.claude/settings.json, then the nearest folder with a .claude/settings(.local).json.
-    """
-    home = Path(_home())
-    start = Path(os.path.realpath(project_dir))
-    nearest = next((d for d in [start, *start.parents]
-                    if (d / ".claude" / "settings.json").is_file()
-                    or (d / ".claude" / "settings.local.json").is_file()), start)
-    files = [home / ".claude" / "settings.json"]
-    if nearest != home:
-        files += [nearest / ".claude" / "settings.json", nearest / ".claude" / "settings.local.json"]
-    merged: dict = {}
-    for f in files:
-        block, counts = _settings_block(f)
-        if counts and block is None:
-            return []  # the plugin does nothing when a settings file is broken
-        if block:
-            merged.update(block)
-    out = []
-    primary = merged.get("primaryProject")
-    if isinstance(primary, str) and primary.strip():
-        out.append(primary.strip())
-    secondary = merged.get("secondaryProjects") if isinstance(merged.get("secondaryProjects"), list) else []
-    team = merged.get("teamProjects") if isinstance(merged.get("teamProjects"), dict) else {}
-    for ref in [*secondary, *team]:
-        if isinstance(ref, str) and ref.strip() and ref.strip() not in out:
-            out.append(ref.strip())
-    return out
-
-
-def briefing_vaults(runtime: dict, project_dir: str) -> list[str]:
-    bmr = runtime.get("basic_memory")
-    if not bmr or not bmr.get("plugin"):
-        return []
-    by_norm = {bm.norm(p): v for p, v in bmr["projects"].items()}
-    return [by_norm[bm.norm(p)] for p in plugin_projects(project_dir) if by_norm.get(bm.norm(p))]
-
-
 # ---------------------------------------------------------------- I/O
 
 def runtime_path() -> Path:
@@ -516,7 +453,7 @@ def runtime_path() -> Path:
 def _may_touch_vault(event: dict, runtime: dict | None) -> bool:
     """For errors: could this call touch a vault? When unsure, yes."""
     tool = event.get("tool_name") or ""
-    if tool.startswith(bm.TOOL_PREFIX):
+    if tool.startswith(plugins.TOOL_PREFIXES):
         return True
     if runtime is None:
         return False  # vl isn't set up here; nothing to guard
@@ -547,10 +484,15 @@ def run(event: dict, env: dict | None = None) -> dict | None:
         if name == "PreToolUse":
             return _pre("deny", f"{ERROR} (runtime.json can't be read: {e})", prefix="")
         return None
+    if runtime.get("version") != RUNTIME_VERSION:  # its layout may hide calls vl should check
+        if name == "PreToolUse" and _may_touch_vault(event, runtime):
+            return _pre("deny", "runtime.json is from another version of vl. Run `vl apply`.")
+        return None
     try:
         project_dir = env.get("CLAUDE_PROJECT_DIR") or event.get("cwd") or ""
         session_id = str(event.get("session_id") or "unknown")
-        briefing = briefing_vaults(runtime, project_dir) if name == "SessionStart" else []
+        briefing = [v for _, plugin, data in plugins.enabled(runtime) if hasattr(plugin, "context_vaults")
+                    for v in plugin.context_vaults(project_dir, data)] if name == "SessionStart" else []
         with lbl.session(state_dir(), session_id) as box:
             out, new_state = decide(event, runtime, box[0], project_dir, briefing)
             if new_state is not None:

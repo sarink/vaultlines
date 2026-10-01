@@ -10,6 +10,7 @@ from pathlib import Path
 
 import tomli_w
 
+from . import plugins
 from .gitsync import check_remote
 from .util import VlError, closest_parent, contract, expand, home
 
@@ -17,10 +18,8 @@ NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 SETTINGS_KEYS = {"vaults_dir", "sync_interval", "check_interval", "on_leak"}
 VAULT_KEYS = {"path", "remote"}
 FOLDER_KEYS = {"writes", "reads", "auto_pull"}
-ADAPTERS = {"basic-memory": {"command"}}  # built-in adapters and their keys
 ON_LEAK = ("ask", "block")
 DEFAULTS = {"vaults_dir": "~/Vaults", "sync_interval": 600, "check_interval": 86400, "on_leak": "ask"}
-BM_COMMAND = "uvx basic-memory"
 
 
 def config_dir() -> Path:
@@ -59,7 +58,7 @@ class Config:
     on_leak: str = DEFAULTS["on_leak"]
     vaults: dict[str, Vault] = field(default_factory=dict)
     folders: dict[str, Folder] = field(default_factory=dict)  # folder path -> entry
-    adapters: dict[str, dict] = field(default_factory=dict)  # adapter name -> its settings
+    plugins: dict[str, dict] = field(default_factory=dict)  # plugin name -> its table, with `kind`
 
     def vault(self, name: str) -> Vault:
         if name not in self.vaults:
@@ -73,14 +72,6 @@ class Config:
     def users(self, vault: str) -> list[str]:
         """Folders that write or read a vault."""
         return [p for p, f in self.folders.items() if vault in f.vaults]
-
-    @property
-    def basic_memory(self) -> bool:
-        return "basic-memory" in self.adapters
-
-    @property
-    def bm_command(self) -> str:
-        return self.adapters.get("basic-memory", {}).get("command", BM_COMMAND)
 
 
 def folder_for(cfg: Config, cwd: str | Path) -> Folder | None:
@@ -128,7 +119,7 @@ def load() -> Config:
         data = tomllib.loads(path.read_text())
     except tomllib.TOMLDecodeError as e:
         raise VlError(f"{contract(path)}: {e}") from None
-    _no_unknown_keys(data, {"settings", "vaults", "folders", "adapters"}, "")
+    _no_unknown_keys(data, {"settings", "vaults", "folders", "plugins"}, "")
 
     s = _table(data.get("settings", {}), "settings")
     _no_unknown_keys(s, SETTINGS_KEYS, "settings")
@@ -166,12 +157,15 @@ def load() -> Config:
             raise _err(key, f"the same folder as another entry ({contract(folder.path)})")
         cfg.folders[folder.path] = folder
 
-    for name, a in _table(data.get("adapters", {}), "adapters").items():
-        key = f"adapters.{name}"
-        if name not in ADAPTERS:
-            raise _err(key, f"unknown adapter. Built in: {', '.join(sorted(ADAPTERS))}")
-        _no_unknown_keys(_table(a, key), ADAPTERS[name], key)
-        cfg.adapters[name] = dict(a)
+    for name, p in _table(data.get("plugins", {}), "plugins").items():
+        key = f"plugins.{name}"
+        kind = _table(p, key).get("kind")
+        if kind is None:
+            raise _err(f"{key}.kind", f'missing. Every plugin needs a kind, like kind = "{next(iter(plugins.KINDS))}"')
+        if kind not in plugins.KINDS:
+            raise _err(f"{key}.kind", f"unknown kind {kind!r}. Built in: {', '.join(sorted(plugins.KINDS))}")
+        _no_unknown_keys(p, {"kind", *getattr(plugins.KINDS[kind], "KEYS", ())}, key)
+        cfg.plugins[name] = dict(p)
 
     validate(cfg)
     return cfg
@@ -181,9 +175,15 @@ def validate(cfg: Config) -> None:
     """Raise a VlError naming the file and key of the first problem."""
     if cfg.on_leak not in ON_LEAK:
         raise _err("settings.on_leak", f'should be "ask" or "block", not {cfg.on_leak!r}')
-    command = cfg.adapters.get("basic-memory", {}).get("command")
-    if command is not None and (not isinstance(command, str) or not command.strip()):
-        raise _err("adapters.basic-memory.command", 'should be a command, like "uvx basic-memory"')
+    seen: dict[str, str] = {}
+    for name, p in sorted(cfg.plugins.items()):
+        module = plugins.KINDS[p["kind"]]
+        if getattr(module, "TOOL_PREFIXES", ()) and p["kind"] in seen:
+            raise _err(f"plugins.{name}", f"only one {p['kind']} plugin can be on; '{seen[p['kind']]}' is too")
+        seen[p["kind"]] = name
+        problem = module.validate(p) if hasattr(module, "validate") else None
+        if problem:
+            raise _err(f"plugins.{name}.{problem[0]}", problem[1])
     for name, v in cfg.vaults.items():
         if not NAME_RE.match(name):
             raise _err(f"vaults.{name}", "vault names use lowercase letters, digits and dashes")
@@ -221,7 +221,7 @@ def save(cfg: Config) -> None:
             entry["auto_pull"] = True
         folders[contract(f.path)] = entry
     data = {"settings": settings, "vaults": vaults, "folders": folders,
-            "adapters": {name: dict(a) for name, a in sorted(cfg.adapters.items())}}
+            "plugins": {name: dict(p) for name, p in sorted(cfg.plugins.items())}}
     path = config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".vl-tmp")

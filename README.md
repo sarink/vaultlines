@@ -76,8 +76,9 @@ auto_pull = true                             # keep this repo pulled
 writes = "side-project"
 reads  = ["personal"]
 
-# ---------------------------------------------------------------- adapters
-[adapters.basic-memory]                      # present = on
+# ---------------------------------------------------------------- plugins
+[plugins.basic-memory]                       # present = on
+kind = "basic-memory"
 ```
 
 GitHub says who can see each vault:
@@ -334,8 +335,10 @@ edit it by hand, then run `vl apply`.
 - `remote` must be `https://github.com/OWNER/REPO` (with or without `.git`). Leave
   it out for a vault that stays on this computer.
 - `on_leak` is `"ask"` (default) or `"block"`.
-- `[adapters.basic-memory]` turns the Basic Memory adapter on. It takes an optional
-  `command` (default `uvx basic-memory`).
+- `[plugins.NAME]` turns a plugin on. Every plugin needs `kind`; the only built-in
+  kind so far is `"basic-memory"`, which takes an optional `command` (default
+  `uvx basic-memory`). Plugins only tell `vl` which vaults a tool call touches;
+  `vl` decides what's allowed.
 
 Mistakes are reported with the file and key, for example
 `~/.config/vaultlines/config.toml: folders."~/code/app".reads: no vault named 'acme'`.
@@ -391,7 +394,7 @@ other settings, hooks and servers are left alone.
 - **`vl` checks that each vault's git remote matches the config.** If they don't
   match, the vault's audience is unknown, so reading it counts as *only you*.
 - **Basic Memory projects `vl` doesn't know are blocked**, and so are new ways to pick
-  a project until the adapter learns them. A project added by hand after the last
+  a project until the plugin learns them. A project added by hand after the last
   `vl apply` isn't known to the hook until the next one.
 - **GitHub stores your notes.** It holds a copy, even of private repos. For notes that
   should never leave your computer, leave out `remote`.

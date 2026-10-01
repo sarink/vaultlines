@@ -64,6 +64,10 @@ def test_hooks_install_remove_and_keep_others(tmp_path):
     assert claude.hooks_installed(path) == []
 
 
+def test_matcher_covers_every_plugin_tool_whether_on_or_off():
+    assert MATCHER == "^(Read|Write|Edit|MultiEdit|NotebookEdit|Grep|Glob|Bash|mcp__basic-memory__.*)$"
+
+
 def test_is_our_hook():
     assert is_our_hook({"command": "vl hook"})
     assert is_our_hook({"command": "/Users/x/.local/bin/vl hook"})
