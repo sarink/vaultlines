@@ -12,7 +12,9 @@ The rules, for a session in folder F (the closest listed parent of where it star
    can see V couldn't see everything the session read.
 4. Writes to a `reads` vault always ask.
 5. Reads are recorded here, before the call runs.
-6. vl itself: writes to its records are blocked; changes to its config, its hooks,
+6. A source's fetch folder (originals from `vl fetch`) counts as its vault, for reads
+   only: writes there are denied. `vl fetch VAULT` is a read of VAULT.
+7. vl itself: writes to its records are blocked; changes to its config, its hooks,
    or `vl` commands that change what it allows ask, unless your latest message
    mentions vl (UserPromptSubmit records that).
 
@@ -31,6 +33,7 @@ from pathlib import Path
 from . import label as lbl
 from . import plugins
 from .plugins.api import here as _here
+from .plugins.api import mentions
 from .util import closest_parent, inside, state_dir
 
 READ_TOOLS = {"Read": "file_path"}
@@ -39,7 +42,9 @@ SEARCH_TOOLS = ("Grep", "Glob")
 MATCHER = "^(" + "|".join(["Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "Grep", "Glob", "Bash",
                             *(f"{p}.*" for p in plugins.TOOL_PREFIXES)]) + ")$"
 ERROR = "vl hook error: run `vl doctor`."
-RUNTIME_VERSION = 2  # runtime.json's layout
+RUNTIME_VERSION = 3  # runtime.json's layout
+FETCH_RE = re.compile(r"(?:^|[\s;&|(`])(?:\S*/)?vl\s+fetch\s+['\"]?([a-z0-9][a-z0-9-]*)")
+FETCHED = "fetched originals are read-only copies. Run `vl fetch` again for a fresh one."
 
 
 class Blocked(Exception):
@@ -60,16 +65,27 @@ def _vault_paths(runtime: dict) -> dict[str, str]:
     return {p: name for name, v in runtime["vaults"].items() for p in v["paths"]}
 
 
-def vault_of(path: str, runtime: dict) -> str | None:
-    folders = _vault_paths(runtime)
+def _fetch_paths(runtime: dict) -> dict[str, str]:
+    """Fetch folder -> the vault whose originals it holds."""
+    return {p: name for name, v in runtime["vaults"].items() for p in v.get("fetch", [])}
+
+
+def vault_of(path: str, runtime: dict, folders: dict[str, str] | None = None) -> str | None:
+    folders = _vault_paths(runtime) if folders is None else folders
     key = closest_parent(folders, path)
     return folders[key] if key else None
 
 
+def fetched_of(path: str, runtime: dict) -> str | None:
+    """The vault a file in a fetch folder came from."""
+    return vault_of(path, runtime, _fetch_paths(runtime))
+
+
 def vaults_within(root: str, runtime: dict) -> list[str]:
-    """Vaults in `root`, or the vault `root` is in."""
-    found = [name for p, name in _vault_paths(runtime).items() if inside(p, root)]
-    own = vault_of(root, runtime)
+    """Vaults (and fetch folders) in `root`, or the one `root` is in."""
+    folders = {**_fetch_paths(runtime), **_vault_paths(runtime)}
+    found = [name for p, name in folders.items() if inside(p, root)]
+    own = vault_of(root, runtime, folders)
     return list(dict.fromkeys(([own] if own else []) + sorted(found)))
 
 
@@ -85,18 +101,20 @@ def _home() -> str:
     return os.path.expanduser("~")
 
 
-def bash_vaults(command: str, cwd: str, runtime: dict) -> list[str]:
+def bash_vaults(command: str, cwd: str, runtime: dict, folders: dict[str, str] | None = None) -> list[str]:
     """Vaults a shell command mentions: by absolute path, ~/..., $HOME/..., or relative to cwd.
+    `folders` (default: the vaults' folders) maps folders to vaults.
 
     Best effort: a command can always build a path in ways no scan can see.
     """
+    folders = _vault_paths(runtime) if folders is None else folders
     found = []
-    here = vault_of(os.path.realpath(cwd), runtime) if cwd else None
+    here = vault_of(os.path.realpath(cwd), runtime, folders) if cwd else None
     if here:
         found.append(here)
     homes = {_home(), os.path.realpath(_home())}
     cwd_real = os.path.realpath(cwd) if cwd else None
-    for p, name in _vault_paths(runtime).items():
+    for p, name in folders.items():
         if name in found:
             continue
         forms = [p]
@@ -148,8 +166,11 @@ def touched(event: dict, runtime: dict, folder: dict | None) -> Call:
         path = args.get(READ_TOOLS.get(tool) or WRITE_TOOLS[tool])
         if isinstance(path, str) and path:
             v = vault_of(_abs(path, cwd), runtime)
-            if v:
-                call.add(v, kind)
+            fetched = None if v else fetched_of(_abs(path, cwd), runtime)
+            if fetched and kind == "write":
+                raise Blocked(FETCHED)
+            if v or fetched:
+                call.add(v or fetched, kind)
     elif tool in SEARCH_TOOLS:
         # An absolute Glob pattern ignores the folder it runs in.
         pattern_root = _glob_root(args["pattern"]) if tool == "Glob" and isinstance(args.get("pattern"), str) else None
@@ -158,7 +179,8 @@ def touched(event: dict, runtime: dict, folder: dict | None) -> Call:
             if not isinstance(root, str):
                 continue
             found = vaults_within(_abs(root, cwd), runtime)
-            if len(found) > 1 or (found and vault_of(_abs(root, cwd), runtime) is None):
+            if len(found) > 1 or (found and not (vault_of(_abs(root, cwd), runtime)
+                                                 or fetched_of(_abs(root, cwd), runtime))):
                 call.search_root = root
             for v in found:
                 call.add(v, "read")
@@ -169,6 +191,9 @@ def touched(event: dict, runtime: dict, folder: dict | None) -> Call:
                 call.add(v, "read")
                 call.add(v, "write")
                 call.bash = True
+            # Originals from `vl fetch`, and `vl fetch` itself, only read.
+            for v in bash_vaults(command, cwd, runtime, _fetch_paths(runtime)) + FETCH_RE.findall(command):
+                call.add(v, "read")
     elif found := plugins.plugin_for_tool(runtime, tool):
         plugin, data = found
         access = plugin.on_call(tool, args, folder, data)
@@ -243,6 +268,10 @@ def _session_start(event: dict, runtime: dict, state: dict | None, project_dir: 
     if reads:
         lines.append(f"You can also read: {', '.join(reads)}. Writing to those asks first.")
     lines.append(" ".join(["Other vaults are blocked here.", *extra]))
+    for v in [w, *reads]:
+        source = plugins.KINDS.get(runtime["vaults"].get(v, {}).get("source"))
+        if source and hasattr(source, "source_briefing"):
+            lines.append(source.source_briefing(v))
     return _output("SessionStart", additionalContext=" ".join(lines)), state
 
 
@@ -317,6 +346,10 @@ def self_guard(event: dict, runtime: dict) -> tuple[str, str] | None:
     tool = event.get("tool_name") or ""
     args = event.get("tool_input") or {}
     cwd = event.get("cwd") or os.getcwd()
+    for _, plugin, data in plugins.enabled(runtime):
+        reason = plugin.guard(tool, args, cwd, data) if hasattr(plugin, "guard") else None
+        if reason:
+            return "deny", reason
     state = os.path.realpath(str(state_dir()))
     config = _config_dir(runtime)
     if tool in WRITE_TOOLS:
@@ -332,12 +365,8 @@ def self_guard(event: dict, runtime: dict) -> tuple[str, str] | None:
         return ("ask", f"This Claude Code settings change affects vl. {why}") if why else None
     if tool == "Bash" and isinstance(args.get("command"), str):
         command = args["command"]
-        homes = {_home(), os.path.realpath(_home())}
-        for d in (state, config):
-            forms = [d] + [f"{pre}/{d[len(h) + 1:]}" for h in homes if inside(d, h) and d != h
-                           for pre in ("~", "$HOME", "${HOME}")]
-            if any(f in command for f in forms):
-                return "ask", "This command touches vl's own files (its config or session records)."
+        if mentions(command, state) or mentions(command, config):
+            return "ask", "This command touches vl's own files (its config or session records)."
         m = VL_COMMAND_RE.search(command)
         if m:
             return "ask", f"This runs `vl {m.group(1)}`, which changes what vl allows. (Mention vl in your message to skip this question.)"

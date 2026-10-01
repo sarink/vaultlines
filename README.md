@@ -26,7 +26,8 @@ It works with the tools you may already use:
   [Obsidian](https://obsidian.md).
 
 Anything may write files into a vault: you, Obsidian, a script, an import job. `vl`
-only guards what Claude does.
+only guards what Claude does. `vl` can also fill a vault from Google Drive itself
+(see [Sources](#sources-fill-a-vault-from-google-drive)).
 
 ## An example
 
@@ -196,6 +197,10 @@ The hook is `vl hook`, installed in `~/.claude/settings.json` for `SessionStart`
 - **Bash:** a vault path in the command (absolute, `~/…`, `$HOME/…`, or relative to
   the current folder) counts as a read **and** a write of that vault. This is best
   effort: a command can always build a path the scan can't see.
+- **Fetched originals:** files in a [source's](#sources-fill-a-vault-from-google-drive)
+  fetch folder count as its vault. Reading or searching them is a read, a Bash command
+  that mentions them only reads, and writing to them is denied. `vl fetch VAULT` is a
+  read of `VAULT`.
 - **Basic Memory:** there is one Basic Memory server for all vaults, and each vault is
   a project with the vault's name. The `project` argument names the vault. If it's
   missing, `vl` fills in the folder's `writes` vault. A `memory://` link whose first
@@ -203,7 +208,7 @@ The hook is `vl hook`, installed in `~/.claude/settings.json` for `SessionStart`
   `workspace`, `search_all_projects`, `recent_activity` without a project, the
   `search` and `fetch` tools, project management, and any argument it doesn't know.
 - **Session start:** Claude gets one line saying where to save notes and what else it
-  may read.
+  may read, and how to fetch originals for a source's vault.
 
 If the hook itself fails, calls that may touch a vault are blocked with
 "vl hook error: run `vl doctor`". Other calls are never blocked.
@@ -252,7 +257,11 @@ never stops on a conflict. If sync fails anyway, you get a notification.
 Folders with `auto_pull = true` are pulled too, fast-forward only. `vl` never pushes
 them. If the pull can't fast-forward, it's skipped and noted in the log.
 
-Sync also deletes session records older than 30 days.
+Before the vaults, sync runs the [sources](#sources-fill-a-vault-from-google-drive)
+that are due, and commits what each one changed on its own.
+
+Sync also deletes session records older than 30 days, and originals `vl fetch` got
+more than a day ago.
 
 ## Install
 
@@ -317,7 +326,9 @@ create a private GitHub repo for it.
 | `vl folder set PATH --writes V [--reads A,B] [--auto-pull]` | Set a folder's vaults. It covers subfolders too. Replaces the folder's entry. |
 | `vl folder unset PATH` | Remove a folder's entry, so it uses its closest listed parent. |
 | `vl check` | Ask GitHub who can see each vault, and show where writes will ask. |
-| `vl sync [VAULT]` | Sync now. |
+| `vl sync [VAULT] [--rebuild] [--take-over]` | Sync now. With `VAULT`, also run the source that fills it, even if it isn't due. `--rebuild` writes all its notes again; `--take-over` fills it from this computer from now on. |
+| `vl source add NAME --drive [options]` | Fill a new vault from Google Drive: a read-only rclone remote, the vault, the config, and a first run. |
+| `vl fetch VAULT PATH` | Download one original for a source's vault, and print where it is. |
 | `vl status` | Vaults and who can see them, folders, hooks, sync. |
 | `vl sessions` | Recent Claude sessions: folder, label, vaults read. |
 | `vl apply` | Set up git, Basic Memory, the plugin, the hooks and Obsidian from the config. |
@@ -339,6 +350,9 @@ edit it by hand, then run `vl apply`.
   kind so far is `"basic-memory"`, which takes an optional `command` (default
   `uvx basic-memory`). Plugins only tell `vl` which vaults a tool call touches;
   `vl` decides what's allowed.
+- A source plugin (`kind = "drive"`) needs `vault`, which must exist, and `remote`.
+  A vault has at most one source, and can't be any folder's `writes`. `every` and
+  `max_size` are optional.
 
 Mistakes are reported with the file and key, for example
 `~/.config/vaultlines/config.toml: folders."~/code/app".reads: no vault named 'acme'`.
@@ -356,9 +370,12 @@ in `~/.config/vaultlines/state.json`.
 | `<folder>/.claude/settings.local.json` | The `basicMemory` block. If the folder is a git repo and the file isn't ignored yet, `vl` adds it to `.git/info/exclude`. |
 | Claude Code MCP servers | One user-level server named `basic-memory`. |
 | Basic Memory | One project per vault, with the vault's name. |
-| `~/.local/state/vaultlines/` | `runtime.json` (what the hook reads) and `sessions/` (one small file per session). |
+| `~/.local/state/vaultlines/` | `runtime.json` (what the hook reads), `sessions/` (one small file per session) and `machine-id`. |
 | Each vault | A git repo with `.gitignore` (`sessions/`, `.obsidian/`) and `.gitattributes` (`*.md merge=union`). |
 | `auto_pull` folders | `git pull --ff-only` on every sync. Nothing else. |
+| A source's vault | One note per Drive file, and `.vl-source` (the computer that fills it). Other files are left alone. |
+| `~/.cache/vaultlines/fetch/` | Originals from `vl fetch`, deleted after a day. |
+| rclone's config | `vl source add` adds a read-only remote named `vl-NAME`. |
 | Obsidian | Adds each vault to the vault switcher, only while Obsidian is closed. |
 | macOS | `~/Library/LaunchAgents/com.vaultlines.sync.plist`, logging to `~/Library/Logs/vaultlines.log`. |
 
@@ -396,10 +413,140 @@ other settings, hooks and servers are left alone.
 - **Basic Memory projects `vl` doesn't know are blocked**, and so are new ways to pick
   a project until the plugin learns them. A project added by hand after the last
   `vl apply` isn't known to the hook until the next one.
+- **Sources only read Drive.** Before every run and every `vl fetch`, `vl` asks Google
+  what the remote's token can do. It refuses if the token could change Drive, or if
+  Google can't be reached. Remotes that wrap another (alias, crypt, union), service
+  accounts, and rclone settings that change the account are refused too. rclone runs
+  with an explicit config file and without `RCLONE_*` variables.
+- **Only `vl` runs rclone on a source's remote.** The hook denies Bash commands that
+  run rclone on it, `rclone config`, and reading or editing rclone's config file. Like
+  every Bash check this is best effort; the read-only token is the guarantee.
+- **A source doesn't copy Drive's sharing.** Whoever can see the vault's GitHub repo
+  sees the text of every file in the Drive folder, whoever Drive shares them with.
+  Originals are another matter: only the computer that fills the source can fetch
+  them, with its Drive account. Point a source at a folder only the vault's audience
+  should see.
 - **GitHub stores your notes.** It holds a copy, even of private repos. For notes that
   should never leave your computer, leave out `remote`.
 - **Leaving a team doesn't delete notes.** When someone leaves, remove their repo
   access. The copy already on their computer stays.
+
+## Sources: fill a vault from Google Drive
+
+A source is a plugin that fills one vault from somewhere else, on a timer. It doesn't
+know who may see what: as for any vault, the vault's GitHub repo decides. The one
+source so far is Google Drive.
+
+The vault holds one markdown note per Drive file: the file's full text, and
+frontmatter that points to the original. The originals stay in Drive, out of git.
+When Claude needs one (to check a table, or open the real PDF), it runs `vl fetch`.
+
+### Set up
+
+Install [rclone](https://rclone.org) and [uv](https://docs.astral.sh/uv/)
+(`brew install rclone uv`), then:
+
+```bash
+vl source add acme-drive --drive --github acme/acme-drive
+```
+
+This:
+
+1. makes an rclone remote, `vl-acme-drive:`, that can only read Drive. rclone opens
+   your browser to sign in to Google;
+2. asks which shared drive the vault should hold, if the account has any (or pass
+   `--shared-drive NAME`). `--folder PATH` takes one folder of it;
+3. checks with Google that the remote can only read;
+4. creates the vault and adds the source to the config;
+5. runs it once, and syncs the vault.
+
+Other options: `--remote NAME:` uses a read-only remote you already have, and
+`--local` keeps the vault on this computer. **Get your own Google client ID** and pass
+`--client-id ID --client-secret SECRET`: rclone's shared one is slow, and is being
+retired during 2026 (see [Making your own client_id](https://rclone.org/drive/#making-your-own-client-id)).
+
+It writes this to the config:
+
+```toml
+[plugins.acme-drive]
+kind     = "drive"
+vault    = "acme-drive"          # the one vault it fills
+remote   = "vl-acme-drive:"      # read-only; "NAME:Folder" and "NAME,team_drive=ID:" work too
+# every    = 3600                # seconds between runs (default: an hour)
+# max_size = "50M"               # bigger files get a note without text
+```
+
+A remote may only set `team_drive` and `root_folder_id`. Other rclone settings in it
+(`token`, `scope`, `service_account_file`…) are refused, because they can change the
+account rclone uses.
+
+### What a run does
+
+Each run lists Drive, downloads only new and changed files to a temporary folder,
+turns them into text with [markitdown](https://github.com/microsoft/markitdown),
+writes the notes and deletes the downloads. A renamed or moved file moves its note; a
+deleted one deletes it. What changed is committed as "Update from NAME", only when
+something did, and then the vault syncs as usual. A failed run is tried again on the
+next sync.
+
+| In Drive | Its note |
+|---|---|
+| Google Docs | the Doc as markdown, at `Name.md` |
+| Google Sheets, Excel files | every tab as a table, at `Name.xlsx.md` |
+| Google Slides and Drawings, PDFs | the text (Slides and Drawings are exported as PDF) |
+| Word and PowerPoint files | the text |
+| Markdown, text and CSV files | the file as it is |
+| A PDF with no text in it (a scan) | frontmatter only, with `text: "no text"` |
+| A file bigger than `max_size` | frontmatter only, with `text: "too big"` |
+| Anything else (zip, video, images, CAD…) | frontmatter only, with `text: "not convertible"` |
+| Forms, shortcuts | none |
+
+A note's text is cut at about 200 KB, with a line saying how to fetch the whole file.
+Files without text aren't tried again until they change in Drive, or until
+`vl sync VAULT --rebuild`. The frontmatter:
+
+```yaml
+---
+title: "Runway"
+type: "drive-file"
+source: "acme-drive"
+id: "1AbC…"
+path: "Finance/Runway.xlsx"
+url: "https://drive.google.com/open?id=1AbC…"
+modified: "2024-12-18T19:43:47Z"
+mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+converter: "markitdown 0.1.8"
+text: "full"
+fetch: "vl fetch acme-drive \"Finance/Runway.xlsx\""
+---
+```
+
+Basic Memory may add to these notes. When the file moves, `vl` keeps the note's body
+and the keys it didn't write; when the file changes, it replaces the body.
+
+### Fetch an original
+
+```bash
+vl fetch acme-drive "Finance/Runway.xlsx"
+```
+
+downloads one file to `~/.cache/vaultlines/fetch/acme-drive/Finance/Runway.xlsx` and
+prints the path. Copies are read-only, and `vl sync` deletes them after a day.
+Sessions in a folder that reads the vault are told how to fetch. For the hook, a
+fetch is a read of the vault, so the same focus and label rules apply.
+
+### Rules
+
+- **One computer fills a source.** The first run writes `.vl-source` to the vault,
+  naming the computer, and runs anywhere else refuse. Two computers would each write
+  their own conversion of a file, and git's union merge would join them into one
+  note. To move a source, run `vl sync VAULT --take-over` on the new computer.
+  Everyone else joins the vault and gets the notes through git; leave the
+  `[plugins…]` table out on their computers. They can't fetch originals.
+- **Nobody writes there.** Each run rewrites the notes, so a source's vault can't be
+  a folder's `writes`. It can be in `reads`.
+- `vl status` shows each source's computer and last run, and `vl doctor` checks
+  rclone, uv and that the remote can only read.
 
 ## A team workspace (optional)
 

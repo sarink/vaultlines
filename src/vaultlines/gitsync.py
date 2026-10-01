@@ -130,15 +130,20 @@ def last_commit_age(path: Path) -> str:
     return git(path, "log", "-1", "--format=%cr", check=False).stdout.strip() or "never"
 
 
+def commit(path: Path, message: str) -> bool:
+    """Commit every change in the vault. False if there was nothing to commit."""
+    git(path, "add", "-A")
+    if git(path, "diff", "--cached", "--quiet", check=False).returncode == 0:
+        return False
+    git(path, "commit", "-q", "-m", message)
+    return True
+
+
 def sync(path: Path) -> str:
     """Commit local changes, get others' changes, send ours. Returns a short status."""
     if not is_repo(path):
         raise VlError(f"{path} is not a git repo. Run `vl apply` to set it up.")
-    git(path, "add", "-A")
-    committed = git(path, "diff", "--cached", "--quiet", check=False).returncode != 0
-    if committed:
-        who = f"{getpass.getuser()}@{socket.gethostname().split('.')[0]}"
-        git(path, "commit", "-q", "-m", f"Notes from {who}")
+    committed = commit(path, f"Notes from {getpass.getuser()}@{socket.gethostname().split('.')[0]}")
     if not remote_url(path):
         return "committed (no remote)" if committed else "synced"
     b = branch(path)

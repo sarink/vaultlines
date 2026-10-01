@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
+
+from ..util import inside
 
 
 @dataclass
@@ -20,3 +23,14 @@ def here(folder: dict | None) -> str:
         return "No vaults are set up for this folder."
     reads = folder.get("reads") or []
     return f"This folder uses {', '.join([folder['writes'], *reads])}."
+
+
+def mentions(command: str, path: str) -> bool:
+    """Whether a shell command names `path`: as it is, or as ~/..., $HOME/... or ${HOME}/..."""
+    forms = [path]
+    home = os.path.expanduser("~")
+    for h in {home, os.path.realpath(home)}:
+        if inside(path, h) and path != h:
+            rel = path[len(h) + 1:]
+            forms += [f"~/{rel}", f"$HOME/{rel}", f"${{HOME}}/{rel}"]
+    return any(f in command for f in forms)

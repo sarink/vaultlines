@@ -146,3 +146,53 @@ def test_folder_for_uses_the_closest_listed_parent(tmp_path):
     assert folder_for(cfg, tmp_path / "acme-other") is None or folder_for(cfg, tmp_path / "acme-other").writes != "mp"
     assert folder_for(cfg, home / "anything").writes == "personal"
     assert folder_for(cfg, "/") is None
+
+
+DRIVE = GOOD + """
+[vaults.drive]
+path = "~/Vaults/drive"
+
+[plugins.mixim-drive]
+kind   = "drive"
+vault  = "drive"
+remote = "mixim:"
+"""
+
+
+def test_drive_plugin_loads(cfg_file, tmp_path):
+    write(cfg_file, DRIVE, tmp_path)
+    cfg = config.load()
+    assert cfg.plugins["mixim-drive"] == {"kind": "drive", "vault": "drive", "remote": "mixim:"}
+    config.save(cfg)
+    assert config.load().plugins == cfg.plugins
+
+
+def test_a_source_vault_can_be_read(cfg_file, tmp_path):
+    write(cfg_file, DRIVE.replace('reads     = ["acme-everyone"]', 'reads = ["acme-everyone", "drive"]'), tmp_path)
+    assert config.load().folders[str(tmp_path.resolve())].reads == ["acme-everyone", "drive"]
+
+
+@pytest.mark.parametrize("old, new, message", [
+    ('vault  = "drive"\n', "", "plugins.mixim-drive.vault: missing"),
+    ('vault  = "drive"', 'vault = "nope"', "plugins.mixim-drive.vault: no vault named 'nope'"),
+    ('vault  = "drive"', 'vault = 5', "plugins.mixim-drive.vault: should be a vault name"),
+    ('writes    = "side"', 'writes = "drive"', "writes: 'drive' is filled by plugin 'mixim-drive'"),
+    ('remote = "mixim:"\n', 'remote = "mixim:"\n[plugins.second]\nkind = "drive"\nvault = "drive"\nremote = "x:"\n',
+     "plugins.second.vault: 'drive' is already filled by plugin 'mixim-drive'"),
+    ('remote = "mixim:"', 'remote = "mixim:"\nevery = 0', "plugins.mixim-drive.every: should be a whole number"),
+    ('remote = "mixim:"', 'remote = "mixim:"\nevery = "1h"', "plugins.mixim-drive.every: should be a whole number"),
+    ('remote = "mixim:"', 'remote = "mixim:"\nmax_size = 50', "plugins.mixim-drive.max_size"),
+    ('remote = "mixim:"\n', "", "plugins.mixim-drive.remote: missing"),
+    ('remote = "mixim:"', 'remote = "mixim:"\ncommand = "rclone --config /x"', "plugins.mixim-drive.command: unknown key"),
+    ('remote = "mixim:"', 'remote = "mixim,service_account_file=/k.json:"',
+     "plugins.mixim-drive.remote: rclone settings in a remote can't include service_account_file"),
+    ('kind = "basic-memory"', 'kind = "basic-memory"\nvault = "drive"', "plugins.basic-memory.vault: unknown key"),
+    ('kind = "basic-memory"', 'kind = "basic-memory"\nevery = 60', "plugins.basic-memory.every: unknown key"),
+])
+def test_source_errors(cfg_file, tmp_path, old, new, message):
+    text = DRIVE.replace(old, new, 1)
+    assert text != DRIVE
+    write(cfg_file, text, tmp_path)
+    with pytest.raises(VlError) as e:
+        config.load()
+    assert message in str(e.value)

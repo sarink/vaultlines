@@ -35,7 +35,7 @@ class World:
         for name in PEOPLE:
             (self.vaults / name).mkdir(parents=True)
         self.runtime = {
-            "version": 2,
+            "version": 3,
             "written_at": 0,
             "me": ME,
             "on_leak": "ask",

@@ -1,7 +1,9 @@
 #!/bin/bash
 # End-to-end test on two fake computers ("alice" and "bob") with local git remotes
 # standing in for GitHub, and a fake list of who can see each one.
-# Touches nothing outside a temporary folder. Needs git, jq, uv and claude.
+# Touches nothing outside a temporary folder. Needs git, jq, uv and claude (and rclone
+# for the Drive section, which is skipped without it). The Drive section uses a local
+# folder as the remote, so it never reaches Google.
 #
 #   tests/e2e.sh            run and clean up
 #   KEEP=1 tests/e2e.sh     keep the temporary folder to look around
@@ -195,6 +197,67 @@ vl alice sync >/dev/null
 check "sync deletes session files older than 30 days" test ! -e "$SESSIONS/e2e-session.json"
 check "  ...and keeps new ones" test -e "$SESSIONS/leak.json"
 
+echo "== a Drive source fills a vault with notes (a local folder stands in for Drive)"
+if command -v rclone >/dev/null && command -v uv >/dev/null; then
+  DRIVE="$ROOT/drive"
+  mkdir -p "$DRIVE/Team Docs" "$DRIVE/Finance"
+  echo "# Plan" > "$DRIVE/Team Docs/Plan.md"
+  cp "$REPO/tests/fixtures/sample.xlsx" "$DRIVE/Finance/Runway.xlsx"
+  printf 'PK\005\006' > "$DRIVE/old.zip"
+  vl alice source add drive --drive --remote "$DRIVE" --local >/dev/null
+  DV="$ROOT/alice/Vaults/drive"
+  check "source add writes the plugin table" grep -q '^\[plugins.drive\]' "$CONFIG"
+  check "  ...and fills the vault with notes" grep -q "Comptroller" "$DV/Finance/Runway.xlsx.md"
+  check "  ...with frontmatter that points to the original" \
+    grep -qx 'fetch: "vl fetch drive \\"Finance/Runway.xlsx\\""' "$DV/Finance/Runway.xlsx.md"
+  check "  ...and a note without text for what can't be converted" grep -qx 'text: "not convertible"' "$DV/old.zip.md"
+  check "  ...committed as Update from drive" grep -qx "Update from drive" <<<"$(git -C "$DV" log --format=%s)"
+  check "  ...with no originals in the vault" test -z "$(cd "$DV" && git ls-files | grep -v '\.md$' | grep -v '^\.git' | grep -vx '.vl-source')"
+  check "  ...and the computer that fills it" jq -e --arg h "$(hostname -s)" '.source == "drive" and .host == $h' "$DV/.vl-source"
+  N="$(git -C "$DV" rev-list --count HEAD)"
+  vl alice sync >/dev/null
+  vl alice sync drive >/dev/null
+  check "a second run makes no commit" test "$(git -C "$DV" rev-list --count HEAD)" = "$N"
+  rm "$DRIVE/old.zip"
+  mv "$DRIVE/Team Docs/Plan.md" "$DRIVE/Team Docs/Plan Q4.md"
+  vl alice sync drive >/dev/null
+  check "deletes show in the notes" test ! -e "$DV/old.zip.md"
+  check "  ...and so do renames" test -f "$DV/Team Docs/Plan Q4.md" -a ! -e "$DV/Team Docs/Plan.md"
+  check "  ...in one more commit" test "$(git -C "$DV" rev-list --count HEAD)" = "$((N + 1))"
+  check "  ...and the vault is synced" test -z "$(git -C "$DV" status --porcelain)"
+
+  FETCHED="$(vl alice fetch drive "Finance/Runway.xlsx")"
+  check "vl fetch copies one original" cmp "$DRIVE/Finance/Runway.xlsx" "$FETCHED"
+  check "  ...into the fetch folder" test "$FETCHED" = "$ROOT/alice/.cache/vaultlines/fetch/drive/Finance/Runway.xlsx"
+  refuses "  ...but not a path outside the remote" vl alice fetch drive "../etc/passwd"
+  refuses "  ...or for a vault no source fills" vl alice fetch personal "x.pdf"
+
+  vl alice folder set "$APP" --writes acme-everyone --reads drive >/dev/null
+  FETCH="$(jq -nc '{hook_event_name: "PreToolUse", session_id: "fetch", tool_name: "Bash", tool_input: {command: "vl fetch drive \"Finance/Runway.xlsx\""}}')"
+  check "the briefing says how to fetch originals" grep -q 'run `vl fetch drive' \
+    <<<"$(hook alice "$APP" '{"hook_event_name": "SessionStart", "source": "startup", "session_id": "fetch"}')"
+  check "the hook lets vl fetch run where the vault is read" test "$(hook alice "$APP" "$FETCH")" = "allow"
+  check "  ...counting it as a read" jq -e '.read | index("drive")' "$ROOT/alice/.local/state/vaultlines/sessions/fetch.json"
+  check "  ...and denies it where the vault isn't used" test "$(hook alice "$LEGAL" "$(jq -c '.session_id = "legal"' <<<"$FETCH")")" = "deny"
+  check "reading a fetched original is a read of the vault" test "$(hook alice "$APP" "$(read_event "$FETCHED" | jq -c '.session_id = "fetch"')")" = "allow"
+  check "  ...and writing it is denied" test "$(hook alice "$APP" "$(write_event "$FETCHED" | jq -c '.session_id = "fetch"')")" = "deny"
+  check "the rclone config can't be read" \
+    test "$(hook alice "$APP" "$(read_event "$ROOT/alice/.config/rclone/rclone.conf" | jq -c '.session_id = "fetch"')")" = "deny"
+  check "status lists the source and its computer" \
+    grep -Eq "^  drive +drive +drive +60 min +$(hostname -s) +.*(new|no changes)" <<<"$(vl alice status)"
+  refuses "a source's vault can't be a folder's writes" vl alice folder set "$APP" --writes drive
+  vl alice folder set "$APP" --writes acme-everyone >/dev/null
+  refuses "can't remove a vault a source fills" vl alice vault remove drive
+  check "doctor checks the source" grep -q "ok    rclone remote $DRIVE can only read Drive" <<<"$(vl alice doctor)"
+  vl alice vault create broken --local >/dev/null
+  printf '\n[plugins.broken]\nkind = "drive"\nvault = "broken"\nremote = "%s"\n' "$ROOT/no-such-folder" >> "$CONFIG"
+  refuses "a failing source fails sync" vl alice sync broken
+  check "  ...and status says so" grep -q "FAILED" <<<"$(vl alice status)"
+  sed '/^\[plugins.broken\]/,/^$/d' "$CONFIG" > "$CONFIG.tmp" && mv "$CONFIG.tmp" "$CONFIG"
+else
+  echo "  skip  rclone or uv isn't installed"
+fi
+
 echo "== adopt, unset, remove, uninstall"
 mkdir -p "$ROOT/alice/old-notes" && echo "# Old" > "$ROOT/alice/old-notes/old.md"
 vl alice vault adopt "$ROOT/alice/old-notes" >/dev/null
@@ -210,7 +273,7 @@ sed '/^\[plugins.basic-memory\]/,/^$/d' "$CONFIG" > "$CONFIG.tmp" && mv "$CONFIG
 vl alice apply >/dev/null
 check "turning the plugin off removes its folder blocks" jq -e '.basicMemory == null' "$LEGAL/.claude/settings.local.json"
 check "  ...and the user-level one" jq -e '.basicMemory == null' "$ROOT/alice/.claude/settings.json"
-check "  ...and its runtime entry" jq -e '.plugins == {}' <(runtime alice)
+check "  ...and its runtime entry" jq -e '.plugins["basic-memory"] == null' <(runtime alice)
 check "  ...and doctor still passes" vl alice doctor
 vl alice uninstall >/dev/null
 check "uninstall removed the hooks" jq -e '.hooks == null' "$ROOT/alice/.claude/settings.json"
