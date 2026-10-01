@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import os
 import re
 import shutil
 import sys
@@ -17,8 +18,10 @@ from .audience import Audience
 from .config import NAME_RE, Config, Folder, Vault, folder_for, show
 from .util import (
     VlError,
+    cache_dir,
     contract,
     expand,
+    fetch_dir,
     notify,
     read_json,
     say,
@@ -131,6 +134,10 @@ def cmd_vault_adopt(args) -> None:
 def cmd_vault_remove(args) -> None:
     cfg = config.load()
     vault = cfg.vault(args.name)
+    for name, _, settings in plugins.sources(cfg):
+        if settings["vault"] == vault.name:
+            raise VlError(f"Plugin '{name}' fills '{vault.name}'. "
+                          f"Remove [plugins.{name}] from {contract(config.config_path())} first.")
     used = cfg.users(vault.name)
     if used:
         raise VlError(f"These folders still use '{vault.name}': {', '.join(show(f) for f in sorted(used))}. "
@@ -392,8 +399,87 @@ def _daily_check(cfg: Config, stamp, background: bool) -> None:
         say(f"{stamp()}check: couldn't reach GitHub for every vault; trying again next sync")
 
 
+def _run_source(cfg: Config, name: str, plugin, settings: dict, vault: Vault,
+                rebuild: bool = False, take_over: bool = False) -> tuple[str, bool]:
+    """Fill a vault from its source and commit what changed, apart from notes. (status, changed)"""
+    if not gitsync.is_repo(vault.path):
+        raise VlError(f"{contract(vault.path)} is not a git repo. Run `vl apply` to set it up.")
+    # First get the vault's latest, so a computer that took over is seen.
+    gitsync.sync(vault.path)
+    plugins.claim(vault.path, vault.name, name, take_over)
+    try:
+        status = plugin.run(cfg, settings, vault, rebuild=rebuild)
+    except VlError:
+        gitsync.commit(vault.path, f"Partial update from {name}")  # what did arrive stays apart from notes
+        raise
+    changed = gitsync.commit(vault.path, f"Update from {name}")
+    return (status if changed else "no changes"), changed
+
+
+def _source_for(cfg: Config, vault: str) -> tuple[str, object, dict]:
+    """The source that fills a vault on this computer."""
+    for name, plugin, settings in plugins.sources(cfg):
+        if settings["vault"] == vault:
+            return name, plugin, settings
+    raise VlError(f"No source fills '{vault}' on this computer.")
+
+
+def _run_sources(cfg: Config, only: str | None, stamp, background: bool,
+                 rebuild: bool = False, take_over: bool = False) -> list[str]:
+    """Run the sources that are due, or the one that fills `only` now. Returns the vaults that failed."""
+    state = audience.load_state()
+    runs = state.setdefault("runs", {})
+    failed = []
+    for name, plugin, settings in plugins.sources(cfg):
+        vault = cfg.vaults[settings["vault"]]
+        now = time.time()
+        if only is not None and vault.name != only:
+            continue
+        last = runs.get(name) or {}
+        # A failed run is tried again on the next sync, as a failed vault sync is.
+        if only is None and not plugins.due(last.get("at") if last.get("ok") else None, plugins.every(plugin, settings), now):
+            continue
+        try:
+            status, changed = _run_source(cfg, name, plugin, settings, vault, rebuild, take_over)
+            runs[name] = {"at": now, "ok": True, "status": status}
+            if not background or changed:
+                say(f"{stamp()}{name} -> {vault.name}: {status}")
+        except VlError as e:
+            failed.append(vault.name)
+            runs[name] = {"at": now, "ok": False, "status": str(e).splitlines()[-1].strip()}
+            say(f"{stamp()}{name} -> {vault.name}: FAILED: {e}")
+    audience.save_state(state)
+    return failed
+
+
+def clean_fetched(max_age: float = 86400) -> int:
+    """Delete originals `vl fetch` got more than `max_age` seconds ago. Returns how many."""
+    root = cache_dir() / "fetch"
+    removed = 0
+    cutoff = time.time() - max_age
+    for dirpath, _, files in os.walk(root, topdown=False):
+        for name in files:
+            path = Path(dirpath) / name
+            try:
+                if path.lstat().st_mtime < cutoff:
+                    path.unlink()
+                    removed += 1
+            except OSError:
+                continue
+        if Path(dirpath) != root:
+            try:
+                os.rmdir(dirpath)
+            except OSError:
+                pass  # not empty
+    return removed
+
+
 def cmd_sync(args) -> None:
     cfg = config.load()
+    if args.rebuild or args.take_over:
+        if not args.vault:
+            raise VlError("--rebuild and --take-over need the VAULT a source fills, like `vl sync drive --rebuild`.")
+        _source_for(cfg, cfg.vault(args.vault).name)
     lock_file = config.config_dir() / "sync.lock"
     lock_file.parent.mkdir(parents=True, exist_ok=True)
     with lock_file.open("w") as lock:
@@ -406,7 +492,10 @@ def cmd_sync(args) -> None:
         if not args.vault and time.time() - audience.load_state().get("checked_at", 0) >= cfg.check_interval:
             _daily_check(cfg, stamp, args.background)
         lbl.clean_sessions(state_dir())
+        clean_fetched()
         vaults = [cfg.vault(args.vault)] if args.vault else list(cfg.vaults.values())
+        # Before the vaults, so a source's commit goes out in the same sync.
+        failed_sources = _run_sources(cfg, args.vault, stamp, args.background, args.rebuild, args.take_over)
         failed = []
         for v in vaults:
             try:
@@ -426,9 +515,12 @@ def cmd_sync(args) -> None:
                         say(f"{contract(f.path)}: pulled")
                 except VlError as e:
                     say(f"{stamp()}{contract(f.path)}: pull skipped: {str(e).splitlines()[-1]}")
-        if failed:
-            if args.background:
-                notify(f"Couldn't sync: {', '.join(failed)}. Run `vl sync` to see why.")
+        if args.background and failed_sources:
+            notify(f"Couldn't update {', '.join(failed_sources)} from its source. "
+                   f"Run `vl sync {failed_sources[0]}` to see why.")
+        if args.background and failed:
+            notify(f"Couldn't sync: {', '.join(failed)}. Run `vl sync` to see why.")
+        if failed or failed_sources:
             sys.exit(1)
 
 
@@ -466,6 +558,34 @@ def cmd_check(args) -> None:
         warn(e)
 
 
+def _ago(seconds: float) -> str:
+    if seconds < 60:
+        return "just now"
+    if seconds < 3600:
+        return f"{int(seconds // 60)} min ago"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)} h ago"
+    return f"{int(seconds // 86400)} days ago"
+
+
+def _source_rows(cfg: Config) -> list[tuple[str, ...]]:
+    runs = audience.load_state().get("runs", {})
+    rows = [("source", "kind", "vault", "every", "computer", "last run")]
+    for name, plugin, settings in plugins.sources(cfg):
+        every = plugins.every(plugin, settings)
+        host = (plugins.owner(cfg.vaults[settings["vault"]].path) or {}).get("host") or "-"
+        run = runs.get(name)
+        if not run:
+            last = "never"
+        elif run["ok"]:
+            last = f"{_ago(time.time() - run['at'])}, {run['status']}"
+        else:
+            last = f"FAILED {_ago(time.time() - run['at'])}: {run['status']}"
+        rows.append((name, settings["kind"], settings["vault"], f"{every // 60} min" if every % 60 == 0 else f"{every} s",
+                     host, last))
+    return rows
+
+
 def cmd_status(args) -> None:
     cfg = config.load()
     if not cfg.vaults:
@@ -488,6 +608,9 @@ def cmd_status(args) -> None:
         _table(_folder_rows(cfg))
     else:
         say('  none. Add one with `vl folder set ~ --writes VAULT`.')
+    if plugins.sources(cfg):
+        say("\nSources")
+        _table(_source_rows(cfg))
     say("")
     hooks = claude.hooks_installed()
     say(f"Claude Code hooks: {'installed' if len(hooks) == len(claude.HOOK_EVENTS) else 'MISSING (run `vl apply`)'}")
@@ -566,6 +689,88 @@ def cmd_doctor(args) -> None:
         sys.exit(1)
 
 
+# ---------------------------------------------------------------- sources
+
+def cmd_fetch(args) -> None:
+    cfg = config.load()
+    vault = cfg.vault(args.vault)
+    try:
+        _, plugin, settings = _source_for(cfg, vault.name)
+    except VlError:
+        raise VlError(f"No source fills '{vault.name}' on this computer, so there's nothing to fetch from.") from None
+    if not hasattr(plugin, "fetch"):
+        raise VlError(f"The {settings['kind']} source can't fetch originals.")
+    say(str(plugin.fetch(cfg, settings, vault, args.path, fetch_dir(vault.name))))
+
+
+def _ask_shared_drive(drives: list[dict]) -> str | None:
+    """Ask which shared drive to use. None: My Drive."""
+    say("This account has shared drives. Which one should the vault hold?")
+    say("  0  My Drive")
+    for i, d in enumerate(drives, 1):
+        say(f"  {i}  {d.get('name')}")
+    while True:
+        answer = input("Number [0]: ").strip() or "0"
+        if answer.isdigit() and int(answer) <= len(drives):
+            return drives[int(answer) - 1]["id"] if int(answer) else None
+        say(f"Type a number from 0 to {len(drives)}.")
+
+
+def cmd_source_add(args) -> None:
+    from .plugins import drive
+
+    cfg = config.load()
+    name = args.name
+    _check_new_name(cfg, name)
+    if name in cfg.plugins:
+        raise VlError(f"There's already a plugin named '{name}' in {contract(config.config_path())}.")
+    if bool(args.client_id) != bool(args.client_secret):
+        raise VlError("--client-id and --client-secret go together.")
+    if args.github:
+        _check_owner_repo(args.github)
+    drive.require_tools()
+
+    remote = args.remote
+    if remote is None:
+        if not args.client_id:
+            warn("rclone's shared client ID is slow and is being retired during 2026. "
+                 f"Make your own and pass --client-id and --client-secret: {drive.CLIENT_ID_HELP}")
+        remote = f"vl-{name}:"
+        say(f"Making the rclone remote {remote} with read-only access. Sign in to Google in the browser.")
+        drive.make_remote(f"vl-{name}", args.client_id, args.client_secret)
+    parsed = drive.parse_remote(remote)
+    drive.check_read_only({"remote": remote})
+    if parsed.name and "team_drive" not in parsed.overrides:
+        drives = drive.shared_drives(parsed.name)
+        if args.shared_drive:
+            parsed.overrides["team_drive"] = drive.find_shared_drive(drives, args.shared_drive)
+        elif drives and sys.stdin.isatty():
+            team = _ask_shared_drive(drives)
+            if team:
+                parsed.overrides["team_drive"] = team
+        elif drives:
+            say("Using My Drive. Pass --shared-drive NAME for a shared drive.")
+    elif args.shared_drive:
+        raise VlError("--shared-drive needs a Drive remote without team_drive in it.")
+    if args.folder:
+        parsed.path = "/".join(p for p in (parsed.path.rstrip("/"), args.folder.strip("/")) if p)
+    remote = drive.remote_string(parsed) if parsed.name else parsed.path
+
+    settings = {"kind": "drive", "vault": name, "remote": remote}
+    problem = drive.validate(settings)
+    if problem:
+        raise VlError(f"{problem[0]}: {problem[1]}")
+    create_vault(cfg, name, args.github, args.local, None)
+    cfg.plugins[name] = settings
+    config.save(cfg)
+    say(f"Added [plugins.{name}] to {contract(config.config_path())}, with remote = {remote!r}")
+    _apply(cfg)
+    say("Turning Drive files into notes. The first run can take a while.")
+    cmd_sync(argparse.Namespace(vault=name, background=False, rebuild=False, take_over=False))
+    say(f"\nDone. vl updates '{name}' every {drive.EVERY // 60} min, from this computer only.")
+    say(f"Next: let Claude read it from a folder, like `vl folder set ~/code/app --writes VAULT --reads {name}`.")
+
+
 def cmd_hook(args) -> None:
     from .hook import main as hook_main
 
@@ -631,10 +836,32 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("path")
     s.set_defaults(func=cmd_folder_unset)
 
-    s = sub.add_parser("sync", help="sync vaults now")
+    s = sub.add_parser("sync", help="sync vaults now (with VAULT, also run its source now)")
     s.add_argument("vault", nargs="?")
+    s.add_argument("--rebuild", action="store_true", help="write every note of VAULT's source again")
+    s.add_argument("--take-over", action="store_true", help="fill VAULT's source from this computer from now on")
     s.add_argument("--background", action="store_true", help=argparse.SUPPRESS)
     s.set_defaults(func=cmd_sync)
+
+    s = sub.add_parser("fetch", help="download the original of a file in a source's vault")
+    s.add_argument("vault")
+    s.add_argument("path", help="the `path` from the note's frontmatter")
+    s.set_defaults(func=cmd_fetch)
+
+    source = sub.add_parser("source", help="fill a vault from Google Drive")
+    ssub = source.add_subparsers(dest="source_command", required=True, metavar="ACTION")
+    s = ssub.add_parser("add", help="set up a read-only Drive remote, a vault and its source, and run it once")
+    s.add_argument("name", help="the vault's name, and the source's")
+    s.add_argument("--drive", action="store_true", required=True, help="from Google Drive (the only kind so far)")
+    s.add_argument("--folder", metavar="PATH", help="only this folder of the drive")
+    s.add_argument("--shared-drive", metavar="NAME_OR_ID", help="a shared drive (default: ask, or My Drive)")
+    s.add_argument("--remote", metavar="EXISTING:", help="a read-only rclone remote you already have")
+    s.add_argument("--client-id", help="your own Google OAuth client ID for rclone")
+    s.add_argument("--client-secret", help="its secret")
+    where = s.add_mutually_exclusive_group()
+    where.add_argument("--github", metavar="OWNER/REPO", help="private GitHub repo to create (default YOU/vault-NAME)")
+    where.add_argument("--local", action="store_true", help="no remote: this computer only")
+    s.set_defaults(func=cmd_source_add)
 
     s = sub.add_parser("sessions", help="recent Claude sessions and what they read (for debugging)")
     s.add_argument("--limit", type=int, default=20)

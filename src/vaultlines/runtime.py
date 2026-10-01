@@ -13,7 +13,7 @@ from . import plugins
 from .audience import Audience
 from .config import Config, config_path
 from .hook import RUNTIME_VERSION
-from .util import contract, read_json, state_dir, write_json
+from .util import contract, expand, fetch_dir, read_json, state_dir, write_json
 
 VERSION = RUNTIME_VERSION
 
@@ -24,6 +24,7 @@ def path() -> Path:
 
 def build(cfg: Config, auds: dict[str, Audience], me: str, plugin_data: dict[str, dict]) -> dict:
     """`plugin_data` is each plugin's `data()`, by plugin name."""
+    filled = {s["vault"]: s["kind"] for _, _, s in plugins.sources(cfg)}
     vaults = {}
     for name, v in sorted(cfg.vaults.items()):
         a = auds.get(name)
@@ -33,6 +34,8 @@ def build(cfg: Config, auds: dict[str, Audience], me: str, plugin_data: dict[str
             "audience": ({"kind": a.kind, "logins": list(a.logins), "reason": a.reason} if a
                          else {"kind": "unknown", "reason": "not checked yet"}),
         }
+        if name in filled:  # a source fills it on this computer
+            vaults[name].update(source=filled[name], fetch=[str(expand(fetch_dir(name)))])
     return {
         "version": VERSION,
         "written_at": time.time(),

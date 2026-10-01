@@ -30,7 +30,7 @@ def _vl_path() -> str:
 
 def _path_env() -> str:
     dirs = []
-    for tool in ("git", "gh", "uvx", "claude"):
+    for tool in ("git", "gh", "uv", "uvx", "claude", "rclone"):
         found = shutil.which(tool)
         if found and os.path.dirname(found) not in dirs:
             dirs.append(os.path.dirname(found))

@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +42,31 @@ def state_dir() -> Path:
     """Where vl keeps files the hook reads: ~/.local/state/vaultlines."""
     base = os.environ.get("XDG_STATE_HOME") or str(home() / ".local" / "state")
     return Path(base) / "vaultlines"
+
+
+def cache_dir() -> Path:
+    """Where vl keeps files it can always make again: ~/.cache/vaultlines."""
+    base = os.environ.get("XDG_CACHE_HOME") or str(home() / ".cache")
+    return Path(base) / "vaultlines"
+
+
+def fetch_dir(vault: str) -> Path:
+    """Where `vl fetch` puts a source vault's originals."""
+    return cache_dir() / "fetch" / vault
+
+
+def machine_id() -> str:
+    """A random ID for this computer, made once."""
+    path = state_dir() / "machine-id"
+    try:
+        found = path.read_text().strip()
+    except FileNotFoundError:
+        found = ""
+    if not found:
+        found = uuid.uuid4().hex
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(found + "\n")
+    return found
 
 
 def inside(path: str, folder: str) -> bool:

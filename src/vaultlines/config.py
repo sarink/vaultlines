@@ -164,7 +164,9 @@ def load() -> Config:
             raise _err(f"{key}.kind", f'missing. Every plugin needs a kind, like kind = "{next(iter(plugins.KINDS))}"')
         if kind not in plugins.KINDS:
             raise _err(f"{key}.kind", f"unknown kind {kind!r}. Built in: {', '.join(sorted(plugins.KINDS))}")
-        _no_unknown_keys(p, {"kind", *getattr(plugins.KINDS[kind], "KEYS", ())}, key)
+        module = plugins.KINDS[kind]
+        _no_unknown_keys(p, {"kind", *getattr(module, "KEYS", ()),
+                             *(plugins.SOURCE_KEYS if hasattr(module, "run") else ())}, key)
         cfg.plugins[name] = dict(p)
 
     validate(cfg)
@@ -201,6 +203,26 @@ def validate(cfg: Config) -> None:
                 raise _err(f"{key}.reads", f"no vault named '{r}'")
         if f.writes in f.reads:
             raise _err(f"{key}.reads", f"'{f.writes}' is the vault this folder writes to, so it can't also be in reads")
+    filled: dict[str, str] = {}
+    for name, _, p in plugins.sources(cfg):
+        key = f"plugins.{name}"
+        vault = p.get("vault")
+        if vault is None:
+            raise _err(f"{key}.vault", 'missing. A source fills one vault, like vault = "NAME"')
+        if not isinstance(vault, str):
+            raise _err(f"{key}.vault", "should be a vault name")
+        if vault not in cfg.vaults:
+            raise _err(f"{key}.vault", f"no vault named '{vault}'")
+        if vault in filled:
+            raise _err(f"{key}.vault", f"'{vault}' is already filled by plugin '{filled[vault]}'. A vault has one source.")
+        filled[vault] = name
+        if "every" in p:
+            _int(p["every"], f"{key}.every")
+    for f in cfg.listed():
+        if f.writes in filled:
+            raise _err(f'folders."{show(f.path)}".writes',
+                       f"'{f.writes}' is filled by plugin '{filled[f.writes]}', and each run replaces its files, "
+                       "so notes can't be written there. Put it in reads instead.")
 
 
 def save(cfg: Config) -> None:

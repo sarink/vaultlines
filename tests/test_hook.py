@@ -534,3 +534,91 @@ def test_prompt_before_any_session_record(world):
                          "prompt": "vl status?"}, world.runtime, None, str(world.site))
     assert out is None
     assert state["asked_vl"] is True and state["label"] == []
+
+
+# ---------------------------------------------------------------- a Drive source's vault, fetch and rclone
+
+def _drive_world(world):
+    """acme-drive: filled from Drive on this computer, read in the acme folder."""
+    fetch = world.home / ".cache" / "vaultlines" / "fetch" / "acme-drive"
+    (world.vaults / "acme-drive").mkdir()
+    world.runtime["vaults"]["acme-drive"] = {
+        "paths": [world.vault("acme-drive")], "show": "~/Vaults/acme-drive",
+        "audience": {"kind": "people", "logins": ["sam", "Lee"], "reason": ""},
+        "source": "drive", "fetch": [str(fetch)]}
+    world.runtime["folders"][str(world.acme)]["reads"].append("acme-drive")
+    world.runtime["plugins"]["acme-drive"] = {
+        "kind": "drive", "tool_prefixes": [],
+        "data": {"vault": "acme-drive", "remote": "vl-acme-drive", "rclone_config": str(world.home / ".config" / "rclone" / "rclone.conf")}}
+    return fetch
+
+
+def test_vl_fetch_is_a_read_of_its_vault(world):
+    _drive_world(world)
+    s = Session(world, world.acme)
+    assert s.call("Bash", command='vl fetch acme-drive "Finance/Runway.xlsx"') is None
+    assert s.state["read"] == ["acme-drive"]
+    out = s.call("Write", file_path=world.vault("acme-everyone", "x.md"))
+    assert decision(out) == "ask" and "ana would see this in acme-everyone" in reason(out)
+
+
+def test_vl_fetch_of_a_vault_the_folder_doesnt_use_is_denied(world):
+    _drive_world(world)
+    s = Session(world, world.site)
+    out = s.call("Bash", command="cd /tmp && ~/.local/bin/vl fetch 'acme-drive' x.pdf")
+    assert decision(out) == "deny"
+    assert "`acme-drive` is not used in this folder" in reason(out)
+
+
+def test_the_fetch_folder_counts_as_its_vault(world):
+    fetch = _drive_world(world)
+    s = Session(world, world.acme)
+    assert s.call("Read", file_path=str(fetch / "Finance" / "Runway.xlsx")) is None
+    assert s.state["read"] == ["acme-drive"] and s.label == frozenset({"sam", "lee"})
+    assert s.call("Grep", pattern="cash", path=str(fetch)) is None
+    assert s.call("Bash", command="python3 -c 'import openpyxl' ~/.cache/vaultlines/fetch/acme-drive/Finance/Runway.xlsx") is None
+    for tool in ("Write", "Edit"):
+        out = s.call(tool, file_path=str(fetch / "Finance" / "Runway.xlsx"), content="x")
+        assert decision(out) == "deny" and "fetched originals are read-only copies" in reason(out)
+
+
+def test_the_fetch_folder_is_denied_where_its_vault_isnt_used(world):
+    fetch = _drive_world(world)
+    s = Session(world, world.site)
+    assert decision(s.call("Read", file_path=str(fetch / "a.pdf"))) == "deny"
+    assert decision(s.call("Bash", command=f"cat {fetch}/a.pdf")) == "deny"
+
+
+def test_rclone_on_the_source_remote_is_denied(world):
+    _drive_world(world)
+    s = Session(world, world.acme)
+    s.event({"hook_event_name": "UserPromptSubmit", "prompt": "use vl to get the file"})
+    for command in ("rclone lsf vl-acme-drive:", "rclone copy 'vl-acme-drive,team_drive=0AB:x' /tmp",
+                    "/opt/homebrew/bin/rclone cat vl-acme-drive:Finance/Runway.xlsx", "rclone config dump",
+                    "cd /tmp; rclone config show vl-acme-drive"):
+        out = s.call("Bash", command=command)
+        assert decision(out) == "deny", command
+        assert "vl fetch" in reason(out)
+    assert s.call("Bash", command="rclone lsf other:") is None
+    assert s.call("Bash", command="echo vl-acme-drive") is None
+
+
+def test_the_rclone_config_is_off_limits(world):
+    _drive_world(world)
+    conf = world.home / ".config" / "rclone" / "rclone.conf"
+    s = Session(world, world.blog)
+    for tool, args in (("Read", {"file_path": str(conf)}), ("Edit", {"file_path": str(conf)}),
+                       ("Write", {"file_path": str(conf), "content": ""}),
+                       ("Bash", {"command": "cat ~/.config/rclone/rclone.conf"}),
+                       ("Bash", {"command": f"grep token {conf}"})):
+        out = s.call(tool, **args)
+        assert decision(out) == "deny", (tool, args)
+        assert "rclone config" in reason(out)
+
+
+def test_the_briefing_says_how_to_fetch(world):
+    _drive_world(world)
+    ctx = Session(world, world.acme).last["hookSpecificOutput"]["additionalContext"]
+    assert ctx.endswith('`acme-drive` holds notes converted from Google Drive by vl. For an original, run '
+                        '`vl fetch acme-drive "<path from the note\'s frontmatter>"`.')
+    assert "vl fetch" not in Session(world, world.site).last["hookSpecificOutput"]["additionalContext"]
