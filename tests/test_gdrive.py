@@ -63,16 +63,39 @@ def test_the_rclone_config_holds_the_token_and_the_drive():
     assert drive.remote_path(SOURCE) == "gdrive:"
 
 
-def test_the_fill_job_runs_this_version_of_vl_hourly():
+def test_the_refresh_job_runs_this_version_of_vl_hourly_in_two_steps():
     from vaultlines import __version__
     from vaultlines.cli import source_workflow
 
     text = source_workflow(drive)
+    vl = f'uvx --from "git+https://github.com/sarink/vaultlines@v{__version__}" vl'
     assert 'cron: "17 * * * *"' in text
-    assert f'uvx --from "git+https://github.com/sarink/vaultlines@v{__version__}" vl source refresh --here' in text
-    assert "VL_SOURCE_TOKEN: ${{ secrets.VL_SOURCE_TOKEN }}" in text
     assert "concurrency: { group: vl-source }" in text
     assert "rclone.org/install.sh" in text  # the kind's own setup steps
+    fetch = text.index(f"{vl} source refresh --fetch-only ${{{{ inputs.force && '--force' || '' }}}}")
+    convert = text.index(f"{vl} source refresh --convert-only")
+    # Only the fetch has the login: the convert runs markitdown, and it never sees the token.
+    assert fetch < text.index("VL_SOURCE_TOKEN: ${{ secrets.VL_SOURCE_TOKEN }}") < convert
+    assert text.count("secrets.") == 1
+
+
+def test_markitdown_runs_without_the_token(tmp_path, monkeypatch):
+    import shutil as shutil_module
+    import subprocess as subprocess_module
+
+    monkeypatch.setenv("VL_SOURCE_TOKEN", "1//SECRET")
+    monkeypatch.setattr(shutil_module, "which", lambda name: f"/bin/{name}")
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen.update(kwargs)
+        return subprocess_module.CompletedProcess(cmd, 1, "", "boom")
+
+    monkeypatch.setattr(subprocess_module, "run", fake_run)
+    with pytest.raises(VlError, match="markitdown failed"):
+        drive._convert([("a.pdf", ".pdf")], str(tmp_path))
+    assert seen["env"] is not None and "VL_SOURCE_TOKEN" not in seen["env"]
+    assert "PATH" in seen["env"]
 
 
 def test_rclone_runs_without_rclone_variables(monkeypatch):
@@ -256,8 +279,14 @@ def local_drive(tmp_path, monkeypatch):
     (vault / "readme.md").write_text("# By hand\n")
     source = {**SOURCE, "shared_drive": str(src), "max_size": "200K"}
 
+    staged = tmp_path / "staged"
+
     def run(force=False):
-        return drive.run(vault, source, VAULT, str(src), None, force=force)
+        """A whole refresh: fetch what changed, then convert it."""
+        shutil.rmtree(staged, ignore_errors=True)
+        staged.mkdir()
+        drive.fetch_changes(vault, source, VAULT, lambda: pytest.fail("a local folder needs no login"), force, staged)
+        return drive.convert(vault, source, VAULT, staged)
 
     return run, Vault(vault), src
 
@@ -419,3 +448,15 @@ def test_local_changes_to_a_filled_vault_go_to_a_branch(tmp_path):
     branch = status.rsplit(" ", 1)[-1]
     shown = subprocess.run(["git", "-C", str(mine), "show", f"{branch}:a.md"], capture_output=True, text=True)
     assert shown.stdout == "edited here\n"
+
+
+@needs_tools
+def test_a_refresh_fetches_at_most_max_fetch_and_the_rest_waits(local_drive, monkeypatch):
+    run, vault, _ = local_drive
+    monkeypatch.setattr(drive, "MAX_FETCH", "1")  # one file each time: the first is always fetched
+    # archive.zip and huge.pdf aren't downloaded, so they get their notes at once.
+    assert run() == "3 new, 0 changed, 0 moved, 0 deleted; 7 files wait for the next refresh"
+    assert (vault.path / "Finance" / "Runway.xlsx.md").exists() and not (vault.path / "deck.pptx.md").exists()
+    assert run() == "1 new, 0 changed, 0 moved, 0 deleted; 6 files wait for the next refresh"
+    monkeypatch.setattr(drive, "MAX_FETCH", "5G")
+    assert run() == "6 new, 0 changed, 0 moved, 0 deleted"

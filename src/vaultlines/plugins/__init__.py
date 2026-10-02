@@ -6,7 +6,8 @@ There are two kinds, each a module where every function is optional unless noted
             on and off (basic_memory = false).
   SOURCES   source kinds: where a vault's notes come from, named by `kind` in the vault's
             [source] table, like gdrive. A vault with a source is read-only in sessions,
-            and refreshed by its refresh job on GitHub.
+            and refreshed by `vl source refresh`: every hour by its refresh job on GitHub,
+            or on any computer.
 
 The hook side is pure, fast and uses only the standard library, because `vl hook`
 imports it. `data` is what the plugin put in runtime.json; `rules` is the session's
@@ -41,7 +42,7 @@ A source kind. `source` is the vault's [source] table, already checked:
   REQUIRED                                keys that must be set. `vl vault create` asks for
                                           the ones left out, at a terminal
   LATER                                   required keys that create() asks for itself, like
-                                          gdrive's shared_drive, picked after the bot logs in
+                                          gdrive's shared_drive, picked after the login
   GUIDE                                   what you need before `vl vault create --source KIND`,
                                           and how to get it. Shown by --help, and when a
                                           required key is left out
@@ -51,12 +52,18 @@ A source kind. `source` is the vault's [source] table, already checked:
                                              refresh job logs in with. ask(question, choices=None)
                                              asks the person for LATER keys (required)
   SETUP_STEPS                             the refresh job's steps before the refresh (YAML)
-  refresh(root, source, vault_id, secret, force)
-                                          -> a status. The refresh job: make the notes in `root`
-                                             match the source (required)
+  A refresh has two halves, so the code that converts files never runs with the login:
+  fetch_changes(root, source, vault_id, secret, force, staged)
+                                          -> a status. Log in with secret() (the login's token),
+                                             and download what changed into the folder `staged`.
+                                             Reads `root`, changes nothing (required)
+  convert(root, source, vault_id, staged) -> a status. Make the notes in `root` match the source,
+                                             from what's in `staged`. No login (required)
   default_about(source), comments(source) for the vault.toml vl writes
   fetch(vault, source, short, path)       -> the local copy of one original
-  login(vault, source), logged_in(source) your own login, for fetching
+  login(source), saved_login(source)     your own login on this computer (saved_login -> its
+                                          token, or None), for fetching, and for refreshing
+                                          when VL_SOURCE_TOKEN isn't set
 """
 
 from __future__ import annotations
@@ -67,7 +74,6 @@ from . import basic_memory, gdrive
 
 KINDS: dict[str, ModuleType] = {"basic-memory": basic_memory}
 SOURCES: dict[str, ModuleType] = {"gdrive": gdrive}
-TOKEN_MISSING = "VL_SOURCE_TOKEN isn't set. `vl vault create --source` puts it in the repo's Actions secrets."
 
 # Every built-in prefix, on or off, so the hook's matcher doesn't change with the config.
 TOOL_PREFIXES: tuple[str, ...] = tuple(p for m in KINDS.values() for p in getattr(m, "TOOL_PREFIXES", ()))

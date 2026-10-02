@@ -73,6 +73,11 @@ def fetch_dir(vault_id: str) -> Path:
     return cache_dir() / "fetch" / vault_id
 
 
+def refresh_dir(vault_id: str) -> Path:
+    """Where `vl source refresh --fetch-only` leaves what changed, for the convert: cache/refresh/OWNER/REPO."""
+    return cache_dir() / "refresh" / vault_id
+
+
 def inside(path: str, folder: str) -> bool:
     """True if `path` is `folder` or something in it. Both must be absolute and normalized."""
     return path == folder or path.startswith(folder.rstrip("/") + "/")

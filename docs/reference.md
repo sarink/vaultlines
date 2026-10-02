@@ -18,7 +18,12 @@ Problems in a `vault.toml` never stop `vl`: they show in `vl apply` and `vl doct
 
 Every kind works the same way:
 
-- The vault's **refresh job** is `.github/workflows/vl-source.yml`. It runs `vl source refresh --here` every hour, and on demand (`vl source refresh VAULT [--force]`). It logs in to the source with the Actions secret `VL_SOURCE_TOKEN`, which `vl vault create` sets. Its commits are "Update from KIND NAME", like "Update from Google Drive".
+- `vl source refresh [VAULT]` refreshes the vault on any computer. It has two halves:
+  - `--fetch-only` logs in, lists the source and downloads what changed into `~/.vaultlines/cache/refresh/OWNER/REPO/`. It reads the vault and changes nothing.
+  - `--convert-only` turns those files into notes, without a login, then commits "Update from KIND NAME" (like "Update from Google Drive") and pushes. It pulls first, and if another refresh pushed in between, it puts its commit on top.
+
+  With neither flag, it does both. It logs in with `VL_SOURCE_TOKEN` if that's set, or else with your own login (`vl source login VAULT`). Without VAULT, it refreshes the vault the current folder is in.
+- The vault's **refresh job** is `.github/workflows/vl-source.yml`. Every hour, it runs `--fetch-only` with the Actions secret `VL_SOURCE_TOKEN` (which `vl vault create` sets), then `--convert-only` in a separate step without it. Start it now with `gh workflow run vl-source.yml --repo OWNER/REPO` (add `-f force=true` to rebuild every note).
 - On your computer, `vl sync` only pulls the vault. Local changes are saved on a branch `local-changes-DATE`, and the vault is reset to GitHub's.
 - In sessions, the vault (and its fetch folder) is read-only.
 
@@ -31,9 +36,9 @@ Every kind works the same way:
 | `max_size` | Bigger files get a note without text (default `"50M"`). |
 | `google_client_id`, `google_client_secret` | The Google OAuth app (desktop type). Its secret isn't secret: Google says so for desktop apps. |
 
-`vl vault create --source gdrive` asks at a terminal for the keys left out: the client ID and secret first (after showing how to make them), then, once the bot account has logged in, the shared drive, picked from the bot's list. Without a terminal, it stops and prints the steps. `vl vault create --source gdrive --help` prints them too.
+`vl vault create --source gdrive` asks at a terminal for the keys left out: the client ID and secret first (after showing how to make them), then, once the refresh job's account has logged in, the shared drive, picked from that account's list. Without a terminal, it stops and prints the steps. `vl vault create --source gdrive --help` prints them too.
 
-`VL_SOURCE_TOKEN` is the bot account's read-only refresh token. Each refresh checks with Google that it can only read, lists the drive, converts new and changed files with markitdown, and writes one note per file. Notes keep keys that others added to their frontmatter.
+`VL_SOURCE_TOKEN` is that account's read-only refresh token (we recommend a bot account that can open only this shared drive). Each fetch checks with Google that the login can only read, lists the drive, and downloads new and changed files, at most 5 GB in one refresh; the rest waits for the next one. The convert turns them into text with markitdown, without the token in its environment, and writes one note per file. Notes keep keys that others added to their frontmatter.
 
 `vl source fetch VAULT PATH` finds the note whose frontmatter `path` is PATH and downloads the file by its Drive ID, so renames don't break it. Google's own files are exported: Docs to `.docx`, Sheets to `.xlsx`, Slides to `.pptx`, Drawings to `.pdf`. It uses your own read-only Google login (`vl source login VAULT`), kept in `~/.vaultlines/google/`.
 
@@ -60,7 +65,7 @@ vl org leave ORG [--delete-files]
 vl vault create VAULT [--about TEXT] [--notes_from REPO]... [--publish]
 vl vault create VAULT --source KIND [--KEY VALUE]... [--about TEXT]     # always published
 vl vault publish VAULT
-vl source refresh VAULT [--force]
+vl source refresh [VAULT] [--fetch-only | --convert-only] [--force]
 vl source fetch VAULT PATH
 vl source login VAULT
 vl sync [VAULT] [--check-github]
@@ -87,7 +92,7 @@ For every call:
 4. Writes to a `reads` vault always ask.
 5. A vault with a source (and its fetch folder) is read-only. Bash that mentions it counts as a read.
 6. `vl source fetch VAULT` in Bash is a read of that vault.
-7. vl's own files: writes to `~/.vaultlines/state` are blocked; any access to `~/.vaultlines/google` is blocked; edits to `config.toml`, to vl's hooks, and the commands `vl init`, `apply`, `uninstall`, `org`, `vault`, `source login`, or `VAULTLINES_*` variables ask, unless your latest message mentions vl, or the repo's `[repos]` entry has `allow_vl_commands = true`.
+7. vl's own files: writes to `~/.vaultlines/state` are blocked; any access to `~/.vaultlines/google` is blocked; edits to `config.toml`, to vl's hooks, and the commands `vl init`, `apply`, `uninstall`, `org`, `vault`, `source login`, `source refresh`, or `VAULTLINES_*` variables ask, unless your latest message mentions vl, or the repo's `[repos]` entry has `allow_vl_commands = true`.
 
 The first session in a new clone counts the vault Basic Memory may have briefed it from before `vl` wrote the repo's block (your personal vault), so its first shared write may ask.
 
@@ -115,7 +120,7 @@ Plugins are built in. Basic Memory (`plugins/basic_memory.py`) answers for its t
 
 - **Read-only access hides the audience.** GitHub only lists a private repo's collaborators to people who can push. Someone with read access to a vault with a source gets "unknown" for it, so after reading it, shared writes ask.
 - **GitHub Actions minutes.** Each hourly refresh takes a minute or two.
-- **The bot account** needs a Google Workspace seat, and should be a member of the shared drive only.
+- **A bot account** for the refresh job needs a Google Workspace seat, and should be a member of the shared drive only. With any other account, anyone who can push to the vault's repo can read everything that account can read in Drive.
 
 ## Tests
 

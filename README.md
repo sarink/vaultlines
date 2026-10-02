@@ -87,9 +87,18 @@ After `--source KIND`, each flag is a key of the `[source]` table in `vault.toml
 
 | Command | What it does |
 |---|---|
-| `vl source refresh VAULT` | Start the refresh job now. `--force` rebuilds every note from scratch. |
+| `vl source refresh [VAULT]` | Refresh the vault on this computer: fetch what changed, convert it, commit and push. Without VAULT: the vault this folder is in. `--force` rebuilds every note from scratch. |
 | `vl source fetch VAULT PATH` | Fetch one original. Claude runs this when a note isn't enough. |
 | `vl source login VAULT` | Log in to the source again, for fetching. |
+
+`vl source refresh` logs in with `VL_SOURCE_TOKEN` if it's set, or else with your own login (`vl source login`). It has two halves, and `--fetch-only` and `--convert-only` run one of them. The refresh job runs them as two steps, so the code that converts files never runs where the login is:
+
+```bash
+VL_SOURCE_TOKEN=... vl source refresh --fetch-only   # with the login: download what changed
+vl source refresh --convert-only                     # without it: write the notes, commit and push
+```
+
+To start the refresh job on GitHub now: `gh workflow run vl-source.yml --repo mixim-ai/vault-hq`.
 
 ### Kind `gdrive`: a Google Drive shared drive
 
@@ -108,9 +117,9 @@ Before you start, you need two things. Log in to Google with your Workspace acco
    2. Turn on the Drive API: <https://console.cloud.google.com/apis/library/drive.googleapis.com>, then "Enable".
    3. Set up the login screen: <https://console.cloud.google.com/auth/overview>, then "Get started". Audience: "Internal".
    4. Make the client: <https://console.cloud.google.com/auth/clients>, then "Create client". Application type: "Desktop app". Google then shows the client ID and the client secret.
-2. **A bot account**: a Google account that the refresh job logs in as. Make a user at <https://admin.google.com> (Directory > Users), and add it to the shared drive as a "Viewer". Add it to no other shared drive.
+2. **A Google account for the refresh job.** We recommend a bot account: make a user at <https://admin.google.com> (Directory > Users), and add it to the shared drive as a "Viewer", and to no other shared drive. Any account works, like your own. But anyone who can push to the vault's repo can use its login to read everything that account can read in Drive.
 
-`vl vault create` asks you to log in as the bot account. It checks that the login can only read Drive. If you left out `--shared_drive`, it lists the bot's shared drives and asks which one. Everyone who can read the vault reads the text of every file in the shared drive.
+`vl vault create` asks you to log in as that account. It checks that the login can only read Drive. If you left out `--shared_drive`, it lists the account's shared drives and asks which one. Everyone who can read the vault reads the text of every file in the shared drive.
 
 A note looks like this:
 

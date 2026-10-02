@@ -248,12 +248,13 @@ check "  ...and the plugin block stays out of that repo's git" test -z "$(git -C
 echo "== a vault from Google Drive"
 if command -v rclone >/dev/null && command -v uv >/dev/null; then
   ACTION="$ROOT/action"
-  admin clone -q "$R/mixim-ai/vault-hq.git" "$ACTION"
-  (cd "$ACTION" && GITHUB_REPOSITORY=mixim-ai/vault-hq vl alice source refresh --here >/dev/null)
-  check "the Action wrote notes and pushed them" test "$(git --git-dir "$R/mixim-ai/vault-hq.git" log -1 --format=%s)" = "Update from Google Drive"
+  admin clone -q "file://$R/mixim-ai/vault-hq.git" "$ACTION"   # its origin names the vault, like GitHub's checkout
+  # The refresh job's two steps, in its checkout: fetch with the login, then convert without it.
+  (cd "$ACTION" && vl alice source refresh --fetch-only >/dev/null && vl alice source refresh --convert-only >/dev/null)
+  check "the refresh job wrote notes and pushed them" test "$(git --git-dir "$R/mixim-ai/vault-hq.git" log -1 --format=%s)" = "Update from Google Drive"
   N="$(git --git-dir "$R/mixim-ai/vault-hq.git" rev-list --count HEAD)"
-  (cd "$ACTION" && GITHUB_REPOSITORY=mixim-ai/vault-hq vl alice source refresh --here >/dev/null)
-  check "  ...and a second run pushes nothing" test "$(git --git-dir "$R/mixim-ai/vault-hq.git" rev-list --count HEAD)" = "$N"
+  vl alice source refresh mixim-ai/vault-hq >/dev/null   # on alice's computer, in her clone
+  check "  ...and a refresh on a laptop pushes nothing new" test "$(git --git-dir "$R/mixim-ai/vault-hq.git" rev-list --count HEAD)" = "$N"
   vl alice sync >/dev/null && vl bob sync >/dev/null
   HQ="$VB/mixim-ai/vault-hq"
   check "bob got the notes" grep -q "Comptroller" "$HQ/Finance/Runway.xlsx.md"

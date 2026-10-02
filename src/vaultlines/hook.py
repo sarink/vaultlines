@@ -335,7 +335,7 @@ def _leak_reason(state: dict, runtime: dict, target: str, people: list[str], ext
 # ---------------------------------------------------------------- vl's own files
 
 VL_COMMAND_RE = re.compile(
-    r"(?:^|[\s;&|(`])(?:\S*/)?vl\s+(init|apply|uninstall|org|vault|source\s+login)\b")
+    r"(?:^|[\s;&|(`])(?:\S*/)?vl\s+(init|apply|uninstall|org|vault|source\s+(?:login|refresh))\b")
 VL_ENV_RE = re.compile(r"\bVAULTLINES_[A-Z_]+")
 GOOGLE = "Google logins are for vl only. To get an original from Drive, run `vl source fetch OWNER/REPO PATH`."
 

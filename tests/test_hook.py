@@ -592,6 +592,8 @@ def test_vl_commands_and_config_ask_unless_you_asked(world):
                        ("Bash", {"command": "vl vault create acme/vault-x"}),
                        ("Bash", {"command": "vl vault create acme/vault-hq --source gdrive"}),
                        ("Bash", {"command": "vl source login acme/vault-drive"}),
+                       ("Bash", {"command": "vl source refresh acme/vault-drive"}),  # pushes a read-only vault
+                       ("Bash", {"command": "vl source refresh --convert-only"}),
                        ("Bash", {"command": "cat ~/.vaultlines/config.toml"}),
                        ("Bash", {"command": "VAULTLINES_HOME=/tmp/x vl status"}),
                        ("Bash", {"command": "echo '{\"disableAllHooks\": true}' > .claude/settings.json"}),

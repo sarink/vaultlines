@@ -10,10 +10,15 @@ A vault's vault.toml says where its notes come from:
     google_client_id     = "1234-abc.apps.googleusercontent.com"
     google_client_secret = "GOCSPX-…"     # a desktop app's; Google doesn't treat it as secret
 
-The vault's refresh job (a GitHub Action) runs `vl source refresh --here` every hour, logged
-in as a bot account with read-only access to Drive. Each refresh lists Drive, downloads only
-new and changed files to a temporary folder, turns them into text with markitdown, and
-writes one note per file. The vault holds only notes.
+`vl source refresh` refreshes the vault, on any computer. The vault's refresh job (a GitHub
+Action) runs it every hour, in two steps:
+
+  vl source refresh --fetch-only     with the read-only login: list Drive, and download only
+                                     new and changed files, into ~/.vaultlines/cache/refresh
+  vl source refresh --convert-only   without it: turn the files into text with markitdown,
+                                     write one note per file, commit and push
+
+markitdown and its packages never run where the login is. The vault holds only notes.
 
 Each note's frontmatter points to its original, which `vl source fetch OWNER/REPO PATH`
 downloads with your own read-only Google login, when Claude needs it.
@@ -42,7 +47,7 @@ OPTIONS = {
 }
 DEFAULTS = {"folder": "", "max_size": "50M"}
 REQUIRED = ("shared_drive", "google_client_id", "google_client_secret")
-LATER = ("shared_drive",)  # create() asks for it after the bot logs in: a list of its shared drives
+LATER = ("shared_drive",)  # create() asks for it after the login: a list of the shared drives it can open
 # What you need before `vl vault create --source gdrive`, and how to get it.
 GUIDE = """\
 Before you start, you need two things. Log in to Google with your Workspace account
@@ -59,16 +64,19 @@ Before you start, you need two things. Log in to Google with your Workspace acco
       Application type: "Desktop app". After "Create", Google shows the client ID
       (google_client_id) and the client secret (google_client_secret).
 
-2. A bot account: a Google account that the refresh job logs in as.
+2. A Google account for the refresh job to log in as. We recommend a bot account: a user
+   that can open this one shared drive and nothing else.
    a. Make a user for it: https://admin.google.com, then Directory > Users > "Add new user".
    b. In Google Drive, add it to the shared drive as a "Viewer". Add it to no other shared drive.
+   Any account works, like your own. But anyone who can push to the vault's repo can use its
+   login to read everything that account can read in Drive.
    vl asks Google only for read access, and checks that the login can't change Drive.
 
 Everyone who can read the vault on GitHub reads the text of every file in the shared drive
 (or the folder).
 """
 KEYS = {"kind", *OPTIONS}
-# The refresh job's setup, before `vl source refresh --here`.
+# The refresh job's setup, before `vl source refresh`.
 SETUP_STEPS = "      - run: curl -fsSL https://rclone.org/install.sh | sudo bash -s __RCLONE__\n"
 # rclone exports each Google type to the first of these it supports: Docs to .md,
 # Sheets to .xlsx, Slides and Drawings to .pdf. Forms and others are left out.
@@ -78,6 +86,8 @@ MARKITDOWN = "0.1.8"
 CONVERTER = f"markitdown {MARKITDOWN}"
 MAX_TEXT = 200_000  # bytes of text in a note
 BATCH = 100  # files downloaded and converted at once
+MAX_FETCH = "5G"  # downloaded in one refresh at most; the rest waits for the next refresh
+PLAN = "plan.json"  # the listing, in the folder the fetch fills
 RCLONE = "v1.75.0"  # installed by the refresh job
 
 # Frontmatter keys vl writes, in order. Any other key is kept as it is.
@@ -140,7 +150,7 @@ def remote_path(source: dict) -> str:
 
 
 def rclone_config(source: dict, drive_id: str, access: str, refresh: str) -> str:
-    """A temporary rclone.conf for one refresh: the bot's read-only login and the drive."""
+    """A temporary rclone.conf for one fetch: the read-only login and the drive."""
     import datetime as dt
 
     expiry = (dt.datetime.now(dt.UTC) + dt.timedelta(minutes=50)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -481,7 +491,8 @@ def _convert(jobs: list[tuple[str, str]], work: str) -> list[dict]:
     out = os.path.join(work, "converted.json")
     job = {"files": [{"file": path, "ext": ext} for path, ext in jobs], "out": out}
     result = subprocess.run([uv, "run", "--quiet", "--no-project", "--with", f"markitdown[pdf,docx,xlsx,pptx]=={MARKITDOWN}",
-                             "python", "-c", CONVERT_SCRIPT], input=json.dumps(job), text=True, capture_output=True)
+                             "python", "-c", CONVERT_SCRIPT], input=json.dumps(job), text=True, capture_output=True,
+                            env={k: v for k, v in os.environ.items() if k != "VL_SOURCE_TOKEN"})
     if result.returncode != 0 or not os.path.exists(out):
         raise VlError("markitdown failed:\n" + "\n".join(result.stderr.strip().splitlines()[-8:]))
     with open(out, encoding="utf-8") as fh:
@@ -521,20 +532,88 @@ def _remove_empty_folders(root: Path) -> None:
             pass  # not empty
 
 
-def run(root: Path, settings: dict, vault_id: str, remote: str, conf: str | None, force: bool = False) -> str:
-    """Make the notes in `root` match the Drive folder `remote` (an rclone path; `conf` its
-    rclone.conf). Returns a status like "3 new, 1 changed, 0 moved, 0 deleted"."""
-    import tempfile
+def _plan(root: Path, files: list[File], force: bool) -> list[Change]:
+    notes = read_notes(root)
+    return changes(files, notes, force, set(_markdown(root)) - {n.file for n in notes})
+
+
+def _sort(plan: list[Change], files: list[File], max_size: str) -> tuple[list, list]:
+    """([(change, how it becomes text)] for files to download, [(change, why)] for files
+    whose note has no text)."""
+    from collections import Counter
+
+    duplicates = {p for p, n in Counter(f.path for f in files).items() if n > 1}
+    todo, without = [], []
+    for c in plan:
+        if c.kind not in ("add", "update"):
+            continue
+        kind = kind_of(c.file.mime, c.file.path)
+        if c.file.path in duplicates:
+            without.append((c, "duplicate name"))
+        elif kind is None:
+            without.append((c, "not convertible"))
+        elif c.file.size > parse_size(max_size):
+            without.append((c, "too big"))
+        else:
+            todo.append((c, kind))
+    return todo, without
+
+
+def _files(n: int) -> str:
+    return f"{n} file" + ("" if n == 1 else "s")
+
+
+def _waiting(n: int) -> str:
+    return f"; {_files(n)} wait{'s' if n == 1 else ''} for the next refresh" if n else ""
+
+
+def _human(size: int) -> str:
+    for unit in ("bytes", "KB", "MB"):
+        if size < 1024:
+            return f"{size:.0f} {unit}" if unit == "bytes" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} GB"
+
+
+def _fetch(root: Path, source: dict, remote: str, conf: str | None, force: bool, staged: Path) -> str:
+    """List the drive (`remote`, an rclone path; `conf` its rclone.conf), download the files
+    that need new notes into `staged`, and save the listing there. Reads `root`, changes nothing."""
+    files = _list(remote, conf)
+    todo, _ = _sort(_plan(root, files, force), files, source.get("max_size") or MAX_SIZE)
+    cap, total, now, later = parse_size(MAX_FETCH), 0, [], []
+    for c, kind in todo:
+        size = max(c.file.size, 0)  # Google's own files have no size until they're exported
+        if now and total + size > cap:
+            later.append(c.file.path)
+        else:
+            now.append((c, kind))
+            total += size
+    where, problems = {}, []
+    for i, batch in enumerate(_batches(now)):
+        error = _download(remote, conf, [c.file.path for c, _ in batch], str(staged / "files" / str(i)))
+        if error:
+            problems.append(error)
+        where.update({c.file.path: str(i) for c, _ in batch})
+    plan = {"force": force, "files": [vars(f) for f in files], "where": where, "later": later, "problems": problems}
+    (staged / PLAN).write_text(json.dumps(plan), encoding="utf-8")
+    return f"Fetched {_files(len(now))} ({_human(total)}) from {NAME}{_waiting(len(later))}"
+
+
+def convert(root: Path, source: dict, vault_id: str, staged: Path) -> str:
+    """The second half of a refresh, without any login: make the notes in `root` match the
+    listing in `staged`, from the files fetched there. Returns a status like "3 new, 1 changed,
+    0 moved, 0 deleted"."""
     from collections import Counter
 
     from ..util import VlError
 
-    source = SOURCE
-    max_size = settings.get("max_size") or MAX_SIZE
-    files = _list(remote, conf)
-    notes = read_notes(root, source)
-    taken = set(_markdown(root)) - {n.file for n in notes}
-    plan = changes(files, notes, force, taken)
+    data = json.loads((staged / PLAN).read_text(encoding="utf-8"))
+    files = [File(**f) for f in data["files"]]
+    later = set(data["later"])
+    max_size = source.get("max_size") or MAX_SIZE
+    plan = _plan(root, files, data["force"])
+    waiting = [c for c in plan if c.kind in ("add", "update") and c.file.path in later]
+    plan = [c for c in plan if c not in waiting]  # their notes stay as they are until the next refresh
     count = Counter(c.kind for c in plan)
 
     # Notes that move are read and taken away before any is written, so two files that
@@ -548,7 +627,7 @@ def run(root: Path, settings: dict, vault_id: str, remote: str, conf: str | None
     for c in plan:
         if c.kind == "move":
             meta, c.note.extra, body = moving[id(c)]
-            fresh = _meta(c.file, source, vault_id, meta.get("text", ""))
+            fresh = _meta(c.file, SOURCE, vault_id, meta.get("text", ""))
             meta.update({k: fresh[k] for k in ("title", "id", "path", "url", "fetch")})
             _write(root, c, meta, body)
 
@@ -559,54 +638,34 @@ def run(root: Path, settings: dict, vault_id: str, remote: str, conf: str | None
             body, status = cut(text, fetch)
         if text is None or status == "no text":
             body = _reason(status, fetch, max_size, c.file)
-        _write(root, c, _meta(c.file, source, vault_id, status), body)
+        _write(root, c, _meta(c.file, SOURCE, vault_id, status), body)
 
-    duplicates = {p for p, n in Counter(f.path for f in files).items() if n > 1}
-    todo = []
-    for c in plan:
-        if c.kind not in ("add", "update"):
-            continue
-        kind = kind_of(c.file.mime, c.file.path)
-        if c.file.path in duplicates:
-            note(c, "duplicate name")
-        elif kind is None:
-            note(c, "not convertible")
-        elif c.file.size > parse_size(max_size):
-            note(c, "too big")
+    todo, without = _sort(plan, files, max_size)
+    for c, why in without:
+        note(c, why)
+    missing, jobs = [], []
+    for c, kind in todo:
+        local = staged / "files" / data["where"].get(c.file.path, "-") / c.file.path
+        if c.file.path not in data["where"] or not local.is_file():
+            missing.append(c.file.path)  # no note yet, so the next refresh tries again
+        elif kind == "text":
+            note(c, text=local.read_bytes().decode("utf-8", "replace").lstrip("\ufeff"))
         else:
-            todo.append((c, kind))
-
-    missing, problems = [], []
-    for batch in _batches(todo):
-        with tempfile.TemporaryDirectory(prefix="vl-drive-") as work:
-            got = os.path.join(work, "files")
-            error = _download(remote, conf, [c.file.path for c, _ in batch], got)
-            if error:
-                problems.append(error)
-            jobs = []
-            for c, kind in batch:
-                local = os.path.join(got, c.file.path)
-                if not os.path.isfile(local):
-                    missing.append(c.file.path)  # no note yet, so the next run tries again
-                elif kind == "text":
-                    with open(local, "rb") as fh:
-                        note(c, text=fh.read().decode("utf-8", "replace").lstrip("\ufeff"))
-                else:
-                    jobs.append((c, local, kind))
-            if jobs:
-                for (c, _, _), result in zip(jobs, _convert([(local, kind) for _, local, kind in jobs], work)):
-                    if "error" in result:
-                        note(c, f"failed: {result['error']}")
-                    else:
-                        note(c, text=result["text"])
+            jobs.append((c, str(local), kind))
+    for group in (jobs[i:i + BATCH] for i in range(0, len(jobs), BATCH)):
+        for (c, _, _), result in zip(group, _convert([(local, kind) for _, local, kind in group], str(staged))):
+            if "error" in result:
+                note(c, f"failed: {result['error']}")
+            else:
+                note(c, text=result["text"])
 
     _remove_empty_folders(root)
     status = f"{count['add']} new, {count['update']} changed, {count['move']} moved, {count['delete']} deleted"
     if missing:
-        detail = f"{problems[-1]}\n" if problems else ""  # `vl status` shows the last line
+        detail = f"{data['problems'][-1]}\n" if data["problems"] else ""  # `vl status` shows the last line
         raise VlError(f"{detail}{status}, but rclone couldn't download {len(missing)} file(s), like {missing[0]!r}. "
-                      "They're tried again next run.")
-    return status
+                      "They're tried again next refresh.")
+    return status + _waiting(len(waiting))
 
 
 # ---------------------------------------------------------------- the hook's side
@@ -636,40 +695,38 @@ def _drive_id(access: str, source: dict) -> tuple[str, str]:
 
 
 def create(vault_id: str, source: dict, ask) -> tuple[dict, str]:
-    """`vl vault create --source gdrive`, on an admin's computer: log in as the bot account,
-    check it can only read and can open the shared drive. Without a shared_drive, asks which
-    one. Returns the [source] table and the refresh job's secret (the bot's refresh token)."""
+    """`vl vault create --source gdrive`, on an admin's computer: log in as the refresh job's
+    account, check it can only read and can open the shared drive. Without a shared_drive, asks
+    which one. Returns the [source] table and the refresh job's secret (the login's refresh token)."""
     from .. import google
     from ..util import say
 
-    say("Log in to Google as the bot account: the account that only reads the shared drive. A browser opens.")
+    say("Log in to Google as the account the refresh job uses (we recommend a bot account). A browser opens.")
     refresh_token = google.login(source["google_client_id"], source["google_client_secret"])
     access = google.access_token(source["google_client_id"], source["google_client_secret"], refresh_token)
     if not source.get("shared_drive"):
         drives = google.shared_drives(access)
         if not drives:
             from ..util import VlError
-            raise VlError("The bot account isn't in any shared drive. Add it to one as a Viewer, then try again.")
-        say("The bot account can open these shared drives:")
+            raise VlError("This account isn't in any shared drive. Add it to one as a Viewer, then try again.")
+        say("This account can open these shared drives:")
         source = {**source, "shared_drive": ask("shared_drive: the vault's notes come from which one",
                                                 [d.get("name") or d["id"] for d in drives])}
     _drive_id(access, source)
     return source, refresh_token
 
 
-def refresh(root: Path, source: dict, vault_id: str, token: str, force: bool) -> str:
-    """The refresh job: make the notes in `root` match the drive. Returns a status."""
+def fetch_changes(root: Path, source: dict, vault_id: str, secret, force: bool, staged: Path) -> str:
+    """The first half of a refresh, the only one with a login: list the drive, and download
+    the files that need new notes into `staged`. `secret()` gives the login's refresh token."""
     import tempfile
 
     from .. import google
-    from ..util import VlError
-    from . import TOKEN_MISSING
 
     remote = remote_path(source)
     if _test_remotes() and (source.get("shared_drive") or "").startswith("/"):
-        return run(root, source, vault_id, remote, None, force=force)  # a local folder, in tests
-    if not token:
-        raise VlError(TOKEN_MISSING)
+        return _fetch(root, source, remote, None, force, staged)  # a local folder, in tests
+    token = secret()
     access = google.access_token(source["google_client_id"], source["google_client_secret"], token)
     google.check_read_only(access)
     drive_id, _ = _drive_id(access, source)
@@ -678,7 +735,7 @@ def refresh(root: Path, source: dict, vault_id: str, token: str, force: bool) ->
         fd = os.open(conf, os.O_WRONLY | os.O_CREAT, 0o600)
         with os.fdopen(fd, "w") as f:
             f.write(rclone_config(source, drive_id, access, token))
-        return run(root, source, vault_id, remote, conf, force=force)
+        return _fetch(root, source, remote, conf, force, staged)
 
 
 def _logged_in(v, source: dict) -> str:
@@ -735,14 +792,15 @@ def fetch(v, source: dict, short: str, path: str) -> Path:
     return out
 
 
-def login(v, source: dict) -> None:
+def login(source: dict) -> None:
     from .. import google
 
     google.save_token(source["google_client_id"],
                       google.login(source["google_client_id"], source["google_client_secret"]))
 
 
-def logged_in(source: dict) -> bool:
+def saved_login(source: dict) -> str | None:
+    """Your own login's refresh token, if you logged in on this computer."""
     from .. import google
 
-    return google.load_token(source["google_client_id"]) is not None
+    return google.load_token(source["google_client_id"])

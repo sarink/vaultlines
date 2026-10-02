@@ -23,6 +23,7 @@ from . import (
     launchd,
     obsidian,
     plugins,
+    rules,
     runtime,
     util,
 )
@@ -247,8 +248,8 @@ def cmd_org_join(args) -> None:
     _table([(vid, shorts[vid], v.about or "-") for vid, v in sorted(cfg.vaults.items()) if v.owner == owner])
     for vid, v in sorted(cfg.vaults.items()):
         kind = plugins.SOURCES.get((v.source or {}).get("kind"))
-        if v.owner == owner and kind and hasattr(kind, "logged_in") and not kind.validate_source(v.source) \
-                and not kind.logged_in(v.source):
+        if v.owner == owner and kind and hasattr(kind, "saved_login") and not kind.validate_source(v.source) \
+                and not kind.saved_login(v.source):
             say(f"\n{vid} holds notes from {kind.NAME}. To fetch originals, run `vl source login {vid}`.")
     say(f"\nRun `claude` in any {owner} repo: vl picks its vaults. See `vl status`.")
 
@@ -351,9 +352,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-__STEPS__      - run: uvx --from "git+https://github.com/sarink/vaultlines@v__VERSION__" vl source refresh --here ${{ inputs.force && '--force' || '' }}
+__STEPS__      - name: Fetch what changed, with the source's read-only login
+        run: uvx --from "git+https://github.com/sarink/vaultlines@v__VERSION__" vl source refresh --fetch-only ${{ inputs.force && '--force' || '' }}
         env:
-          VL_SOURCE_TOKEN: ${{ secrets.VL_SOURCE_TOKEN }}   # the source's read-only login
+          VL_SOURCE_TOKEN: ${{ secrets.VL_SOURCE_TOKEN }}
+      - name: Convert it, commit and push, without the login
+        run: uvx --from "git+https://github.com/sarink/vaultlines@v__VERSION__" vl source refresh --convert-only
 """
 
 
@@ -411,6 +415,7 @@ def _create_with_source(args, vault_id: str, notes_from: list[str]) -> None:
     _apply(config.load())
     say(f"\nMade {vault_id}. Its refresh job on GitHub refreshes it from {kind.NAME} every hour.")
     say(f"The first refresh is starting. Watch it with `gh run watch --repo {vault_id}`.")
+    say(f"To start it again: `gh workflow run {WORKFLOW_FILE} --repo {vault_id}`.")
     say("Give people read access to the repo on GitHub; `vl sync` finds it for them.")
 
 
@@ -434,35 +439,80 @@ def _source_vault(ref: str):
 
 
 def cmd_source_refresh(args) -> None:
-    if args.here:
-        return _refresh_here(args)
-    if not args.vault:
-        raise VlError("Give the vault to refresh, like `vl source refresh acme/vault-hq`.")
-    v, _, _ = _source_vault(args.vault)
-    github.run_workflow(v.id, WORKFLOW_FILE, {"force": "true"} if args.force else {})
-    what = "Rebuilding every note of" if args.force else "Refreshing"
-    say(f"{what} {v.id} on GitHub. Watch it with `gh run watch --repo {v.id}`.")
+    """Fetch what changed (the only half with a login), then convert it, commit and push."""
+    if args.convert_only and args.force:
+        raise VlError("--force goes with the fetch: the convert does what the fetch planned.")
+    root, vault_id, kind, source = _refresh_target(args.vault)
+    staged = util.refresh_dir(vault_id)
+    again = "vl source refresh" + (f" {args.vault}" if args.vault else "")
+    if not args.convert_only:
+        _take_remote(root)
+        shutil.rmtree(staged, ignore_errors=True)
+        staged.mkdir(parents=True)
+        fetched = kind.fetch_changes(root, source, vault_id, lambda: _source_login(kind, source, vault_id),
+                                     args.force, staged)
+        say(fetched + (f". Next: `{again} --convert-only`." if args.fetch_only else ""))
+        if args.fetch_only:
+            return
+    elif not staged.is_dir():
+        raise VlError(f"Nothing fetched for {vault_id}. Run `{again} --fetch-only` first.")
+    try:
+        _take_remote(root)
+        _convert(root, kind, source, vault_id, staged)
+    finally:
+        shutil.rmtree(staged, ignore_errors=True)
 
 
-def _refresh_here(args) -> None:
-    """The refresh job: refresh the vault in this clone, commit and push."""
-    root = Path(args.path or ".").resolve()
-    info, _ = vlt.parse_vault_toml((root / vlt.VAULT_FILE).read_text() if (root / vlt.VAULT_FILE).exists() else "")
+def _refresh_target(ref: str | None):
+    """(clone, vault ID, kind, [source]) of the vault to refresh: the one named, or else the
+    one this folder is in."""
+    if ref:
+        v, kind, source = _source_vault(ref)
+        return v.path, v.id, kind, source
+    found = rules.repo_of(os.getcwd())
+    if not found or not found[1] or not (Path(found[0]) / vlt.VAULT_FILE).exists():
+        raise VlError("Give the vault to refresh, like `vl source refresh acme/vault-hq`, or run it in the vault's "
+                      "clone.")
+    root, vault_id = Path(found[0]), found[1][0]
+    info, _ = vlt.parse_vault_toml((root / vlt.VAULT_FILE).read_text())
     if info.source is None:
-        raise VlError(f"{root / vlt.VAULT_FILE} has no [source].")
+        raise VlError(f"{vault_id} has no source.")
     kind = _kind(info.source.get("kind"))
     problems = kind.validate_source(info.source)
     if problems:
-        raise VlError("vault.toml [source]: " + "; ".join(problems))
-    vault_id = (args.vault or os.environ.get("GITHUB_REPOSITORY") or vlt.remote_id(vlt.git_origin(root)) or "").lower()
-    if not vlt.valid_id(vault_id):
-        raise VlError("Can't tell which vault this is. Run it in the vault's clone.")
+        raise VlError(f"{vault_id}'s vault.toml has problems in [source]: " + "; ".join(problems))
+    return root, vault_id, kind, info.source
+
+
+def _source_login(kind, source: dict, vault_id: str) -> str:
+    """The login a refresh uses: VL_SOURCE_TOKEN if it's set, or else your own on this computer."""
+    token = os.environ.get("VL_SOURCE_TOKEN", "").strip()
+    if token:
+        return token
+    saved = kind.saved_login(source) if hasattr(kind, "saved_login") else None
+    if not saved and util.interactive() and hasattr(kind, "login"):
+        say(f"Log in to {kind.NAME}, read-only. A browser opens.")
+        kind.login(source)
+        saved = kind.saved_login(source)
+    if not saved:
+        raise VlError(f"No login for {kind.NAME}: set VL_SOURCE_TOKEN, or run `vl source login {vault_id}`.")
+    return saved
+
+
+def _take_remote(root: Path) -> None:
+    """Start from the vault as it is on GitHub."""
+    if gitsync.remote_url(root):
+        status = gitsync.pull_keeping_changes(root)
+        if status.startswith("synced."):
+            say(status[len("synced. "):])
+
+
+def _convert(root: Path, kind, source: dict, vault_id: str, staged: Path) -> None:
     if not gitsync.git(root, "config", "user.email", check=False).stdout.strip():
         gitsync.git(root, "config", "user.name", "github-actions[bot]")
         gitsync.git(root, "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com")
-    token = os.environ.get("VL_SOURCE_TOKEN", "").strip()
     try:
-        status = kind.refresh(root, info.source, vault_id, token, args.force)
+        status = kind.convert(root, source, vault_id, staged)
     except VlError:
         if gitsync.commit(root, f"Partial update from {kind.NAME}"):  # what did arrive is kept
             _push(root)
@@ -475,8 +525,16 @@ def _refresh_here(args) -> None:
 
 
 def _push(root: Path) -> None:
-    if gitsync.remote_url(root) and gitsync.git(root, "push", "-q", "origin", "HEAD", check=False).returncode != 0:
-        raise VlError("couldn't push the notes")
+    """Push, and if another refresh pushed first, put these notes on top of its and try again."""
+    if not gitsync.remote_url(root):
+        return
+    for _ in range(3):
+        if gitsync.git(root, "push", "-q", "origin", "HEAD", check=False).returncode == 0:
+            return
+        if gitsync.git(root, "pull", "-q", "--rebase", "origin", gitsync.branch(root), check=False).returncode != 0:
+            gitsync.git(root, "rebase", "--abort", check=False)
+            break
+    raise VlError("couldn't push the notes")
 
 
 def cmd_source_fetch(args) -> None:
@@ -490,7 +548,7 @@ def cmd_source_login(args) -> None:
     v, kind, source = _source_vault(args.vault)
     if not hasattr(kind, "login"):
         raise VlError(f"{kind.NAME} sources have no login.")
-    kind.login(v, source)
+    kind.login(source)
     say(f"Logged in to {kind.NAME} for {v.id}, read-only. `vl source fetch` can get originals now.")
 
 
@@ -893,8 +951,8 @@ def cmd_doctor(args) -> None:
             continue
         problems = kind.validate_source(v.source)
         check(not problems, f"{vid}: [source] in vault.toml is complete", "; ".join(problems))
-        if not problems and hasattr(kind, "logged_in"):
-            on = kind.logged_in(v.source)
+        if not problems and hasattr(kind, "saved_login"):
+            on = kind.saved_login(v.source) is not None
             say(f"  {'ok  ' if on else 'note'}  {vid}: " + (f"logged in to {kind.NAME} for fetching" if on
                                                           else f"not logged in for fetching (`vl source login {vid}`)"))
     say("Claude Code")
@@ -983,11 +1041,16 @@ def build_parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
 
     source = sub.add_parser("source", help="vaults with a source")
     ssub = source.add_subparsers(dest="source_command", required=True, metavar="ACTION")
-    s = ssub.add_parser("refresh", help="start the vault's refresh job on GitHub now")
-    s.add_argument("vault", metavar="VAULT", nargs="?")
+    s = ssub.add_parser("refresh", help="refresh a vault from its source, on this computer",
+                        description="Refresh a vault from its source, on this computer: fetch what changed, "
+                        "convert it, commit and push. It logs in with VL_SOURCE_TOKEN if that's set, or else "
+                        "with your own login (`vl source login`).")
+    s.add_argument("vault", metavar="VAULT", nargs="?", help="OWNER/vault-NAME (default: the vault this folder is in)")
     s.add_argument("--force", action="store_true", help="rebuild every note from scratch")
-    s.add_argument("--here", action="store_true", help=argparse.SUPPRESS)  # the refresh job itself
-    s.add_argument("--path", help=argparse.SUPPRESS)
+    only = s.add_mutually_exclusive_group()
+    only.add_argument("--fetch-only", action="store_true", help="only fetch what changed, with the login")
+    only.add_argument("--convert-only", action="store_true", help="only convert what --fetch-only fetched, "
+                      "commit and push, without the login")
     s.set_defaults(func=cmd_source_refresh)
     s = ssub.add_parser("fetch", help="fetch one original into the fetch folder and print where it is")
     s.add_argument("vault", metavar="VAULT")

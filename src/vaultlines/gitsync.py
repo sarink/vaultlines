@@ -165,6 +165,6 @@ def pull_keeping_changes(path: Path) -> str:
     git(path, "reset", "-q", "--hard", f"origin/{b}")
     git(path, "clean", "-q", "-fd", "-e", "sessions/", "-e", ".obsidian/")
     if saved:
-        return (f"synced. This vault is refreshed on GitHub, so local changes were moved to the branch "
+        return (f"synced. This vault is refreshed from its source, so local changes were moved to the branch "
                 f"{saved}")
     return "synced"

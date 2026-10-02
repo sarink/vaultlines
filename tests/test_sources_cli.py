@@ -14,7 +14,7 @@ from fake_google import REFRESH, FakeGoogle
 
 from vaultlines import cli, google, runtime, vaults
 from vaultlines.plugins import gdrive
-from vaultlines.util import fetch_dir, vaults_dir
+from vaultlines.util import fetch_dir, refresh_dir, vaults_dir
 
 CLIENT = "1234-abc.apps.googleusercontent.com"
 SOURCE = f'''about = "The text of every file in the Mixim HQ shared drive. Claude only reads it."
@@ -85,7 +85,8 @@ def test_create_makes_the_vault_its_fill_job_and_secret(fake_github, computer, g
     workflow = subprocess.run(["git", "--git-dir", str(bare), "show", "HEAD:.github/workflows/vl-source.yml"],
                               capture_output=True, text=True).stdout
     assert workflow == cli.source_workflow(gdrive)
-    assert "vl source refresh --here" in workflow and "rclone" in workflow
+    assert "vl source refresh --fetch-only" in workflow and "rclone" in workflow
+    assert "gh workflow run vl-source.yml --repo mixim-ai/vault-hq" in out  # to start it again by hand
     assert (vaults_dir() / "mixim-ai" / "vault-hq" / "vault.toml").exists()
     assert google.load_token(CLIENT) is None  # the bot's login goes to GitHub only
 
@@ -302,15 +303,6 @@ def test_login(hq):
     assert google.load_token(CLIENT) == REFRESH
 
 
-def test_refresh_starts_the_refresh_job_and_force_rebuilds(hq):
-    vl("org", "join", "mixim-ai")
-    assert vl("source", "refresh", "mixim-ai/vault-hq") == 0
-    assert vl("source", "refresh", "mixim-ai-hq", "--force") == 0
-    assert hq.load()["workflow_runs"] == [
-        {"repo": "mixim-ai/vault-hq", "workflow": "vl-source.yml", "inputs": {}},
-        {"repo": "mixim-ai/vault-hq", "workflow": "vl-source.yml", "inputs": {"force": "true"}}]
-
-
 def test_sync_only_pulls_a_vault_with_a_source(hq, capsys):
     vl("org", "join", "mixim-ai")
     path = vaults_dir() / "mixim-ai" / "vault-hq"
@@ -320,7 +312,7 @@ def test_sync_only_pulls_a_vault_with_a_source(hq, capsys):
     capsys.readouterr()
     assert vl("sync") == 0
     out = capsys.readouterr().out
-    assert "mixim-ai/vault-hq: synced. This vault is refreshed on GitHub, so local changes were moved" in out
+    assert "mixim-ai/vault-hq: synced. This vault is refreshed from its source, so local changes were moved" in out
     assert (path / "Team" / "New.md").exists()
     assert (path / "Finance" / "Runway.xlsx.md").read_text() != "edited here\n"
     assert vl("status") == 0
@@ -339,70 +331,130 @@ def test_old_fetched_files_are_cleaned(tmp_path, monkeypatch):
     assert not old.exists() and not old.parent.exists() and new.exists()
 
 
-# ---------------------------------------------------------------- the refresh job: `vl source refresh --here`
+# ---------------------------------------------------------------- vl source refresh [VAULT], on any computer
 
 needs_tools = pytest.mark.skipif(not (shutil.which("rclone") and shutil.which("uv")),
                                  reason="rclone or uv isn't installed")
 
 
-def _checkout(fake_github, tmp_path, toml):
-    """The refresh job's checkout of the vault."""
-    fake_github.repo("mixim-ai/vault-hq", ["alice"], {"vault.toml": toml})
+def _checkout(fake_github, tmp_path, toml, files=None):
+    """A clone of the vault, like the refresh job's checkout."""
+    fake_github.repo("mixim-ai/vault-hq", ["alice"], {"vault.toml": toml, **(files or {})})
     work = tmp_path / "checkout"
     subprocess.run(["git", "clone", "-q", fake_github.url("mixim-ai/vault-hq"), str(work)], check=True)
     return work
 
 
-@needs_tools
-def test_refresh_here_converts_commits_and_pushes(fake_github, computer, tmp_path, monkeypatch, capsys):
+def _bare_log(fake_github):
+    bare = fake_github.root / "mixim-ai" / "vault-hq.git"
+    return subprocess.run(["git", "--git-dir", str(bare), "log", "--format=%s"], capture_output=True,
+                          text=True).stdout.splitlines()
+
+
+def _local_drive(tmp_path):
     drive_folder = tmp_path / "drive"
     (drive_folder / "Team").mkdir(parents=True)
     (drive_folder / "Team" / "Plan.md").write_text("# Plan\n")
     # In tests, shared_drive may be a local folder standing in for the drive.
-    work = _checkout(fake_github, tmp_path, SOURCE.replace('"Mixim HQ"', json.dumps(str(drive_folder))))
-    monkeypatch.chdir(work)
-    monkeypatch.setenv("GITHUB_REPOSITORY", "mixim-ai/vault-hq")
-    assert vl("source", "refresh", "--here") == 0
+    return SOURCE.replace('"Mixim HQ"', json.dumps(str(drive_folder)))
+
+
+@needs_tools
+def test_refresh_in_the_vault_fetches_converts_commits_and_pushes(fake_github, computer, tmp_path, monkeypatch,
+                                                                   capsys):
+    work = _checkout(fake_github, tmp_path, _local_drive(tmp_path), {"Inbox/by hand.md": "kept\n"})
+    monkeypatch.chdir(work / "Inbox")  # anywhere in the clone
+    assert vl("source", "refresh") == 0
     assert "1 new" in capsys.readouterr().out
+    assert _bare_log(fake_github)[0] == "Update from Google Drive"
     bare = fake_github.root / "mixim-ai" / "vault-hq.git"
-    log = subprocess.run(["git", "--git-dir", str(bare), "log", "--format=%s"], capture_output=True, text=True).stdout
-    assert log.splitlines()[0] == "Update from Google Drive"
     shown = subprocess.run(["git", "--git-dir", str(bare), "show", "HEAD:Team/Plan.md"], capture_output=True, text=True)
     assert 'fetch: "vl source fetch mixim-ai/vault-hq \\"Team/Plan.md\\""' in shown.stdout
-    assert vl("source", "refresh", "--here") == 0
+    assert not refresh_dir("mixim-ai/vault-hq").exists()  # nothing is left behind
+    assert vl("source", "refresh") == 0
     assert "no changes" in capsys.readouterr().out
 
 
-def test_refresh_here_needs_the_token(fake_github, computer, tmp_path, monkeypatch, capsys):
+@needs_tools
+def test_refresh_in_two_steps_and_pull_before_push(fake_github, computer, tmp_path, monkeypatch, capsys):
+    """The refresh job's two steps: only the fetch has the login; the convert commits and pushes."""
+    monkeypatch.chdir(_checkout(fake_github, tmp_path, _local_drive(tmp_path)))
+    assert vl("source", "refresh", "--fetch-only") == 0
+    out = capsys.readouterr().out
+    assert "Fetched 1 file" in out and "vl source refresh --convert-only" in out
+    assert (refresh_dir("mixim-ai/vault-hq")).is_dir()
+    assert _bare_log(fake_github) == ["seed"]  # nothing committed yet
+    other = tmp_path / "other"
+    subprocess.run(["git", "clone", "-q", fake_github.url("mixim-ai/vault-hq"), str(other)], check=True)
+    commit_files(other, {"Other.md": "by someone else\n"}, "Another refresh")
+    assert vl("source", "refresh", "--convert-only") == 0
+    assert "1 new" in capsys.readouterr().out
+    assert _bare_log(fake_github)[:2] == ["Update from Google Drive", "Another refresh"]
+    assert not refresh_dir("mixim-ai/vault-hq").exists()
+
+
+def test_convert_only_needs_a_fetch_first(fake_github, computer, tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(_checkout(fake_github, tmp_path, SOURCE))
+    assert vl("source", "refresh", "--convert-only") == 1
+    assert "Nothing fetched for mixim-ai/vault-hq. Run `vl source refresh --fetch-only` first." in capsys.readouterr().err
+    assert vl("source", "refresh", "--convert-only", "--force") == 1
+    assert "--force goes with the fetch" in capsys.readouterr().err
+
+
+def test_refresh_outside_a_vault_says_to_give_one(fake_github, computer, tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    assert vl("source", "refresh") == 1
+    assert "Give the vault to refresh, like `vl source refresh acme/vault-hq`" in capsys.readouterr().err
+
+
+@pytest.fixture
+def fetched(monkeypatch):
+    """Stand in for the fetch from Drive: keep the rclone.conf it was given, and where it was."""
+    seen = {}
+
+    def fake_fetch(root, source, remote, conf, force, staged):
+        with open(conf) as f:
+            seen["conf"], seen["path"] = f.read(), conf
+        return "Fetched 0 files"
+
+    monkeypatch.setattr(gdrive, "_fetch", fake_fetch)
+    return seen
+
+
+def test_refresh_without_a_login_says_how_to_get_one(fake_github, computer, google_fake, tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(_checkout(fake_github, tmp_path, SOURCE))
     monkeypatch.delenv("VL_SOURCE_TOKEN", raising=False)
-    assert vl("source", "refresh", "--here") == 1
-    assert "VL_SOURCE_TOKEN" in capsys.readouterr().err
+    assert vl("source", "refresh", "--fetch-only") == 1
+    err = capsys.readouterr().err
+    assert "set VL_SOURCE_TOKEN, or run `vl source login mixim-ai/vault-hq`" in err
 
 
-def test_refresh_here_refuses_a_token_that_can_change_drive(fake_github, computer, google_fake, tmp_path, monkeypatch,
-                                                            capsys):
+def test_refresh_a_vault_by_name_with_your_own_login(hq, monkeypatch, fetched, capsys):
+    vl("org", "join", "mixim-ai")
+    monkeypatch.delenv("VL_SOURCE_TOKEN", raising=False)
+    google.save_token(CLIENT, REFRESH)
+    assert vl("source", "refresh", "mixim-ai/vault-hq", "--fetch-only") == 0
+    assert "team_drive = 0AHF8p0HI9kM1Uk9PVA\n" in fetched["conf"]  # found by its name
+    assert not os.path.exists(fetched["path"])  # the login's file is gone after the fetch
+    assert "SECRET" not in "".join(capsys.readouterr())
+
+
+def test_the_token_in_the_environment_comes_first(fake_github, computer, google_fake, tmp_path, monkeypatch, fetched):
+    monkeypatch.chdir(_checkout(fake_github, tmp_path, SOURCE))
+    google.save_token(CLIENT, "1//SOMEONE-ELSE")  # the fake Google refuses this one
+    monkeypatch.setenv("VL_SOURCE_TOKEN", REFRESH)
+    assert vl("source", "refresh", "--fetch-only") == 0
+    assert REFRESH in fetched["conf"]
+
+
+def test_refresh_refuses_a_login_that_can_change_drive(fake_github, computer, google_fake, tmp_path, monkeypatch,
+                                                      capsys):
     monkeypatch.chdir(_checkout(fake_github, tmp_path, SOURCE))
     monkeypatch.setenv("VL_SOURCE_TOKEN", REFRESH)
     google_fake.scope = "https://www.googleapis.com/auth/drive"
-    assert vl("source", "refresh", "--here") == 1
+    assert vl("source", "refresh", "--fetch-only") == 1
     err = capsys.readouterr().err
     assert "can change Google Drive" in err and "SECRET" not in err
-
-
-def test_refresh_here_finds_the_shared_drive_by_name(fake_github, computer, google_fake, tmp_path, monkeypatch):
-    monkeypatch.chdir(_checkout(fake_github, tmp_path, SOURCE))
-    monkeypatch.setenv("VL_SOURCE_TOKEN", REFRESH)
-    seen = {}
-
-    def fake_run(root, source, vault_id, remote, conf, force=False):
-        with open(conf) as f:
-            seen["conf"] = f.read()
-        return "0 new, 0 changed, 0 moved, 0 deleted"
-
-    monkeypatch.setattr(gdrive, "run", fake_run)
-    assert vl("source", "refresh", "--here") == 0
-    assert "team_drive = 0AHF8p0HI9kM1Uk9PVA\n" in seen["conf"]
 
 
 def test_no_fill_words_left(capsys):
