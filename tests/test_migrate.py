@@ -201,3 +201,18 @@ def test_no_old_setup(fake_github, computer, capsys):
 def test_bad_maps(old, capsys, bad):
     assert vl("migrate", "--map", bad) == 1
     assert not vaults_dir().exists()
+
+
+def test_entries_notes_from_already_covers_are_left_out(old, fake_github):
+    work = fake_github.root / ".work" / "mixim-ai" / "vault-public"
+    from conftest import commit_files
+
+    commit_files(work, {"vault.toml": 'notes_from = ["mixim-ai/marketing", "mixim-ai/mixim-workspace"]\n'}, "nf")
+    subprocess.run(["git", "-C", str(old / "code" / "mixim" / "workspace" / "mixim-public"), "pull", "-q",
+                    fake_github.url("mixim-ai/vault-public"), "main"], check=True, capture_output=True)
+    assert vl(*ARGS) == 0
+    cfg = config.load_file()
+    assert "mixim-ai/marketing" not in cfg.repos
+    workspace = cfg.repos["mixim-ai/mixim-workspace"]
+    assert (workspace.writes, workspace.auto_pull) == (None, True)  # kept for auto_pull only
+    assert runtime.load()["repos"]["mixim-ai/mixim-workspace"] == {"writes": None, "reads": []}

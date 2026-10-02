@@ -178,6 +178,11 @@ def make_plan(old: Old, me: str, maps: dict[str, str]) -> Plan:
 
     ids = plan.ids
     default = vlt.personal_id(me, me)
+    notes_from = {}  # repo -> the vault whose vault.toml lists it
+    for m in plan.moves:
+        if m.target:
+            for r in vlt.read(m.target, m.old.path).notes_from:
+                notes_from.setdefault(r, m.target)
     for folder, f in sorted(old.folders.items()):
         writes, reads = ids.get(f.get("writes")), [ids.get(r) for r in f.get("reads", [])]
         if writes is None or None in reads:
@@ -193,8 +198,12 @@ def make_plan(old: Old, me: str, maps: dict[str, str]) -> Plan:
             repo = next((r for r in found[1] if r.split("/")[0] in plan.owners), None)
         entry = {"writes": writes, "reads": reads}
         if repo:
-            plan.repos[repo] = {**entry, "auto_pull": bool(f.get("auto_pull"))}
             plan.clones[found[0]] = repo
+            if notes_from.get(repo) == writes and not reads:
+                if not f.get("auto_pull"):
+                    continue  # notes_from already does this
+                entry["writes"] = None
+            plan.repos[repo] = {**entry, "auto_pull": bool(f.get("auto_pull"))}
         elif writes == default and not reads and Path(folder) == home():
             continue  # "~" with your personal vault is what vl does anyway
         else:
@@ -215,8 +224,9 @@ def show(plan: Plan) -> None:
     if plan.repos or plan.folders:
         say("\nconfig.toml")
         for key, e in plan.repos.items():
-            say(f"  [repos.\"{key}\"] writes {e['writes']}" + (f", reads {', '.join(e['reads'])}" if e["reads"] else "")
-                + (", auto_pull" if e["auto_pull"] else ""))
+            parts = ([f"writes {e['writes']}"] if e["writes"] else []) + ([f"reads {', '.join(e['reads'])}"] if e["reads"]
+                                                                            else []) + (["auto_pull"] if e["auto_pull"] else [])
+            say(f"  [repos.\"{key}\"] {', '.join(parts)}")
         for key, e in plan.folders.items():
             say(f"  [folders.\"{contract(key)}\"] writes {e['writes']}"
                 + (f", reads {', '.join(e['reads'])}" if e["reads"] else ""))
@@ -239,7 +249,7 @@ def _entries(plan: Plan, cfg: config.Config) -> str:
     for key, e in plan.repos.items():
         if key in cfg.repos:
             continue
-        lines = [f'[repos."{key}"]', f"writes    = {_toml(e['writes'])}"]
+        lines = [f'[repos."{key}"]'] + ([f"writes    = {_toml(e['writes'])}"] if e["writes"] else [])
         if e["reads"]:
             lines.append(f"reads     = {_toml(e['reads'])}")
         if e["auto_pull"]:
@@ -383,7 +393,7 @@ def migrate(args) -> None:
         say("Still to do:")
         for m in waiting:
             say(f"  {m.old.name}: {m.why}")
-    suggest = [(k, e) for k, e in plan.repos.items() if e["writes"].split("/")[0] == k.split("/")[0]]
+    suggest = [(k, e) for k, e in plan.repos.items() if e["writes"] and e["writes"].split("/")[0] == k.split("/")[0]]
     if suggest:
         say("These config.toml entries can go once the vault lists the repo in notes_from (in its vault.toml):")
         for key, e in suggest:
