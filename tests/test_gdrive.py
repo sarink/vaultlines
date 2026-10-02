@@ -18,7 +18,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 needs_tools = pytest.mark.skipif(not (shutil.which("rclone") and shutil.which("uv")),
                                  reason="rclone or uv isn't installed")
 VAULT = "mixim-ai/vault-hq"
-SOURCE = {"kind": "gdrive", "shared_drive": "Mixim HQ", "folder": "",
+SOURCE = {"kind": "gdrive", "folder_id": "0AHF8p0HI9kM1Uk9PVA",
           "max_size": "50M", "google_client_id": "1234-abc.apps.googleusercontent.com",
           "google_client_secret": "GOCSPX-x"}
 
@@ -27,40 +27,64 @@ SOURCE = {"kind": "gdrive", "shared_drive": "Mixim HQ", "folder": "",
 
 def test_a_good_source():
     assert drive.validate_source(SOURCE) == []
-    assert drive.validate_source({**SOURCE, "folder": "Finance/2024"}) == []
+    assert drive.validate_source({**SOURCE, "folder_id": "https://drive.google.com/drive/folders/1AbC-d_9"}) == []
 
 
 @pytest.mark.parametrize("change, problem", [
-    ({"shared_drive": 5}, "shared_drive"),
-    ({"shared_drive": "/abs"}, "shared_drive"),
-    ({"folder": "/abs"}, "folder"),
-    ({"folder": "a/../b"}, "folder"),
+    ({"folder_id": 5}, "folder_id"),
+    ({"folder_id": "Acme HQ"}, "folder_id: should be a Drive folder's URL or ID"),
+    ({"folder_id": "/abs"}, "folder_id"),
+    ({"folder_id": None}, "folder_id: missing"),
     ({"max_size": "lots"}, "max_size"),
     ({"google_client_id": ""}, "google_client_id"),
     ({"google_client_secret": None}, "google_client_secret"),
     ({"colour": "red"}, "colour: unknown key"),
+    ({"shared_drive": "Acme HQ"}, "shared_drive: unknown key"),
 ])
 def test_source_problems(change, problem):
     source = {k: v for k, v in {**SOURCE, **change}.items() if v is not None}
     assert any(problem in p for p in drive.validate_source(source))
 
 
+@pytest.mark.parametrize("text, wanted", [
+    ("1AbC-d_9", "1AbC-d_9"),
+    ("  0AHF8p0HI9kM1Uk9PVA ", "0AHF8p0HI9kM1Uk9PVA"),
+    ("https://drive.google.com/drive/folders/1AbC-d_9", "1AbC-d_9"),
+    ("https://drive.google.com/drive/u/1/folders/1AbC-d_9?usp=sharing", "1AbC-d_9"),
+    ("https://drive.google.com/open?id=1AbC-d_9", "1AbC-d_9"),
+    ("Acme HQ", None),
+    ("https://example.com/x", None),
+    ("", None),
+])
+def test_a_folder_id_from_a_url_or_an_id(text, wanted):
+    assert drive.folder_id_of(text) == wanted
+
+
 def test_a_local_folder_counts_only_in_tests(monkeypatch):
-    local = {**SOURCE, "shared_drive": "/tmp/drive"}
+    local = {**SOURCE, "folder_id": "/tmp/drive"}
     assert drive.validate_source(local)
     monkeypatch.setenv("VAULTLINES_TEST_REMOTES", "1")
     assert drive.validate_source(local) == []
-
-
-def test_the_rclone_config_holds_the_token_and_the_drive():
-    text = drive.rclone_config(SOURCE, "0AHF8p0HI9kM1Uk9PVA", "ya29.ACCESS", "1//REFRESH")
-    assert "[gdrive]\ntype = drive\nscope = drive.readonly\n" in text
-    assert "client_id = 1234-abc.apps.googleusercontent.com\n" in text
-    assert "team_drive = 0AHF8p0HI9kM1Uk9PVA\n" in text
-    token = json.loads(next(line for line in text.splitlines() if line.startswith("token = "))[len("token = "):])
-    assert token["access_token"] == "ya29.ACCESS" and token["refresh_token"] == "1//REFRESH"
-    assert drive.remote_path({**SOURCE, "folder": "Finance/2024"}) == "gdrive:Finance/2024"
+    assert drive.remote_path(local) == "/tmp/drive"
     assert drive.remote_path(SOURCE) == "gdrive:"
+
+
+def _conf(place):
+    text = drive.rclone_config(SOURCE, place, "ya29.ACCESS", "1//REFRESH")
+    return text, dict(line.split(" = ", 1) for line in text.splitlines()[1:])
+
+
+def test_the_rclone_config_holds_the_token_and_the_folder():
+    text, conf = _conf({"id": "0AHF8p0HI9kM1Uk9PVA", "drive_id": "0AHF8p0HI9kM1Uk9PVA"})  # a whole shared drive
+    assert text.startswith("[gdrive]\ntype = drive\nscope = drive.readonly\n")
+    assert conf["client_id"] == "1234-abc.apps.googleusercontent.com"
+    assert conf["team_drive"] == "0AHF8p0HI9kM1Uk9PVA" and "root_folder_id" not in conf
+    token = json.loads(conf["token"])
+    assert token["access_token"] == "ya29.ACCESS" and token["refresh_token"] == "1//REFRESH"
+    _, conf = _conf({"id": "FIN", "drive_id": "0AHF8p0HI9kM1Uk9PVA"})  # a folder in a shared drive
+    assert (conf["team_drive"], conf["root_folder_id"]) == ("0AHF8p0HI9kM1Uk9PVA", "FIN")
+    _, conf = _conf({"id": "BOARD", "drive_id": ""})  # a folder in someone's My Drive
+    assert conf["root_folder_id"] == "BOARD" and "team_drive" not in conf
 
 
 def test_the_refresh_job_runs_this_version_of_vl_hourly_in_two_steps():
@@ -277,7 +301,7 @@ def local_drive(tmp_path, monkeypatch):
     vault = tmp_path / "vault"
     subprocess.run(["git", "init", "-q", str(vault)], check=True)
     (vault / "readme.md").write_text("# By hand\n")
-    source = {**SOURCE, "shared_drive": str(src), "max_size": "200K"}
+    source = {**SOURCE, "folder_id": str(src), "max_size": "200K"}
 
     staged = tmp_path / "staged"
 
@@ -460,3 +484,15 @@ def test_a_refresh_fetches_at_most_max_fetch_and_the_rest_waits(local_drive, mon
     assert run() == "1 new, 0 changed, 0 moved, 0 deleted; 6 files wait for the next refresh"
     monkeypatch.setattr(drive, "MAX_FETCH", "5G")
     assert run() == "6 new, 0 changed, 0 moved, 0 deleted"
+
+
+def test_two_folders_with_one_name_are_told_apart_by_id():
+    items = [{"id": "A1", "label": "Plans/"}, {"id": "B2", "label": "Plans/"}, {"id": "C3", "label": "Notes/"}]
+    shown = []
+
+    def ask(question, choices):
+        shown.extend(choices)
+        return choices[1]
+
+    assert drive._choose(ask, "which", items)["id"] == "B2"
+    assert shown == ["Plans/ [A1]", "Plans/ [B2]", "Notes/"]

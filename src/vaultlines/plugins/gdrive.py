@@ -4,11 +4,13 @@ A vault's vault.toml says where its notes come from:
 
     [source]
     kind                 = "gdrive"
-    shared_drive         = "Acme HQ"      # the shared drive's name (or ID)
-    folder               = ""             # the whole drive, or a folder in it
+    folder_id            = "0AHF8p0HI9kM1Uk9PVA"   # Acme HQ
     max_size             = "50M"          # bigger files get a note without text
     google_client_id     = "1234-abc.apps.googleusercontent.com"
     google_client_secret = "GOCSPX-…"     # a desktop app's; Google doesn't treat it as secret
+
+folder_id is a folder in Drive, or a whole shared drive: the part of its URL after
+/folders/. `vl vault create --source gdrive` lists them by name, so you can pick one.
 
 `vl source refresh` refreshes the vault, on any computer. The vault's refresh job (a GitHub
 Action) runs it every hour, in two steps:
@@ -39,41 +41,44 @@ NAME = "Google Drive"
 SOURCE = "gdrive"  # the kind, and the `source` key of every note this source writes
 # The [source] keys, besides `kind`. `vl vault create --source gdrive` takes each as --KEY.
 OPTIONS = {
-    "shared_drive": "the shared drive's name (or ID)",
-    "folder": "only this folder of the drive (default: the whole drive)",
+    "folder_id": "the Drive folder or shared drive the notes come from: its URL or ID (left out: vl lists them)",
     "max_size": 'bigger files get a note without text (default: "50M")',
     "google_client_id": "the client ID of the Google OAuth app (desktop type)",
     "google_client_secret": "its secret (a desktop app's; Google doesn't treat it as secret)",
 }
-DEFAULTS = {"folder": "", "max_size": "50M"}
-REQUIRED = ("shared_drive", "google_client_id", "google_client_secret")
-LATER = ("shared_drive",)  # create() asks for it after the login: a list of the shared drives it can open
+DEFAULTS = {"max_size": "50M"}
+REQUIRED = ("folder_id", "google_client_id", "google_client_secret")
+LATER = ("folder_id",)  # create() asks for it after the login: the folders and shared drives it can open
 # What you need before `vl vault create --source gdrive`, and how to get it.
 GUIDE = """\
-Before you start, you need two things. Log in to Google with your Workspace account
-(like you@company.com, not a personal Gmail account).
+Before you start, you need two things.
 
 1. A Google OAuth app, so vl can log in to Google. It takes about 5 minutes:
    a. Make a project: https://console.cloud.google.com/projectcreate
-      For "Location", pick your organization.
+      With a Workspace account (like you@company.com), for "Location", pick your organization.
    b. Turn on the Drive API: https://console.cloud.google.com/apis/library/drive.googleapis.com
       Check that your new project is selected at the top, then click "Enable".
    c. Set up the login screen: https://console.cloud.google.com/auth/overview, then "Get started".
-      Audience: "Internal". Then only your organization's accounts can log in.
+      With a Workspace account, Audience: "Internal". Then only your organization's accounts
+      can log in.
+      With a personal Gmail account, Audience: "External". Then, on the "Audience" page, click
+      "Publish app": while the app is "Testing", Google ends each login after 7 days. When you
+      log in, Google warns that it hasn't verified the app. It's your own app, so continue.
    d. Make the client: https://console.cloud.google.com/auth/clients, then "Create client".
       Application type: "Desktop app". After "Create", Google shows the client ID
       (google_client_id) and the client secret (google_client_secret).
 
-2. A Google account for the refresh job to log in as. We recommend a bot account: a user
-   that can open this one shared drive and nothing else.
-   a. Make a user for it: https://admin.google.com, then Directory > Users > "Add new user".
-   b. In Google Drive, add it to the shared drive as a "Viewer". Add it to no other shared drive.
+2. A Google account for the refresh job to log in as. We recommend a bot account: an
+   account that can open the vault's folder (or shared drive) and nothing else.
+   a. Make it. With Workspace: https://admin.google.com, then Directory > Users > "Add new
+      user". Without: a new Gmail account.
+   b. In Google Drive, share the folder with it as a "Viewer", or add it to the shared drive
+      as a "Viewer". Share nothing else with it.
    Any account works, like your own. But anyone who can push to the vault's repo can use its
    login to read everything that account can read in Drive.
    vl asks Google only for read access, and checks that the login can't change Drive.
 
-Everyone who can read the vault on GitHub reads the text of every file in the shared drive
-(or the folder).
+Everyone who can read the vault on GitHub reads the text of every file in the folder.
 """
 KEYS = {"kind", *OPTIONS}
 # The refresh job's setup, before `vl source refresh`.
@@ -126,12 +131,10 @@ def validate_source(source: dict) -> list[str]:
     for key in REQUIRED:
         if not isinstance(source.get(key), str) or not source[key].strip():
             problems.append(f"{key}: missing. {OPTIONS[key][0].upper()}{OPTIONS[key][1:]}.")
-    drive = source.get("shared_drive", "")
-    if isinstance(drive, str) and drive.startswith("/") and not _test_remotes():
-        problems.append("shared_drive: should be a shared drive's name or ID, not a folder")
-    folder = source.get("folder", "")
-    if not isinstance(folder, str) or (folder and _bad_path(folder.strip("/") if folder.endswith("/") else folder)):
-        problems.append("folder: should be a folder in the drive, like \"Finance/2024\", or \"\" for all of it")
+    folder = source.get("folder_id")
+    if isinstance(folder, str) and folder.strip() and not _local(folder) and not folder_id_of(folder):
+        problems.append("folder_id: should be a Drive folder's URL or ID, like "
+                        "https://drive.google.com/drive/folders/1AbC…")
     max_size = source.get("max_size", MAX_SIZE)
     try:
         parse_size(max_size if isinstance(max_size, str) else "")
@@ -140,17 +143,32 @@ def validate_source(source: dict) -> list[str]:
     return problems
 
 
+FOLDER_URL = re.compile(r"^https://drive\.google\.com/(?:drive/(?:u/\d+/)?folders/|open\?id=)([\w-]+)(?:[?&/#].*)?$")
+
+
+def folder_id_of(text: str) -> str | None:
+    """The ID in a Drive folder's URL, or the ID itself."""
+    text = text.strip()
+    m = FOLDER_URL.match(text)
+    if m:
+        return m.group(1)
+    return text if re.fullmatch(r"[\w-]+", text) else None
+
+
+def _local(folder: str) -> bool:
+    """In tests, folder_id may be a local folder standing in for Drive."""
+    return _test_remotes() and folder.startswith("/")
+
+
 def remote_path(source: dict) -> str:
-    """The rclone path of the drive (or its folder). In tests, shared_drive may be a local folder."""
-    folder = (source.get("folder") or "").strip("/")
-    drive = source.get("shared_drive") or ""
-    if _test_remotes() and drive.startswith("/"):
-        return os.path.join(drive, folder) if folder else drive
-    return f"gdrive:{folder}"
+    """The rclone path of the folder: its rclone.conf points `gdrive:` at it."""
+    folder = source.get("folder_id") or ""
+    return folder if _local(folder) else "gdrive:"
 
 
-def rclone_config(source: dict, drive_id: str, access: str, refresh: str) -> str:
-    """A temporary rclone.conf for one fetch: the read-only login and the drive."""
+def rclone_config(source: dict, place: dict, access: str, refresh: str) -> str:
+    """A temporary rclone.conf for one fetch: the read-only login and the folder (`place`,
+    from google.find_folder)."""
     import datetime as dt
 
     expiry = (dt.datetime.now(dt.UTC) + dt.timedelta(minutes=50)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -158,8 +176,10 @@ def rclone_config(source: dict, drive_id: str, access: str, refresh: str) -> str
     lines = ["[gdrive]", "type = drive", "scope = drive.readonly",
              f"client_id = {source['google_client_id']}", f"client_secret = {source['google_client_secret']}",
              f"token = {token}"]
-    if drive_id:
-        lines.append(f"team_drive = {drive_id}")
+    if place["drive_id"]:
+        lines.append(f"team_drive = {place['drive_id']}")
+    if place["id"] != place["drive_id"]:  # a folder, not a whole shared drive
+        lines.append(f"root_folder_id = {place['id']}")
     return "\n".join(lines) + "\n"
 
 
@@ -677,64 +697,96 @@ def source_briefing(short: str, vault_id: str) -> str:
 
 # ---------------------------------------------------------------- vl's side
 
-def default_about(source: dict) -> str:
-    return f"The text of every file in the {source['shared_drive']} shared drive. Claude only reads it."
+def default_about(name: str) -> str:
+    return f"The text of every file in {name}, in Google Drive. Claude only reads it."
 
 
-def comments(source: dict) -> dict:
-    """Comments for the [source] table vl writes."""
-    return {"folder": None if source.get("folder") else "the whole drive",
-            "google_client_secret": "a desktop app's secret; Google doesn't treat it as secret"}
+def comments(source: dict, name: str) -> dict:
+    """Comments for the [source] table vl writes. `name`: what people call the folder."""
+    return {"folder_id": name, "google_client_secret": "a desktop app's secret; Google doesn't treat it as secret"}
 
 
-def _drive_id(access: str, source: dict) -> tuple[str, str]:
-    """(ID, name) of the shared drive."""
+def _choose(ask, question: str, items: list[dict]) -> dict:
+    """Ask for one of `items`, by its label. Two with the same label get their IDs added."""
+    labels = [i["label"] for i in items]
+    labels = [f"{label} [{i['id']}]" if labels.count(label) > 1 else label for label, i in zip(labels, items)]
+    return items[labels.index(ask(question, labels))]
+
+
+def _pick(access: str, ask) -> tuple[str, str]:
+    """The person picks a shared drive, a folder shared with the account, or My Drive, by
+    name, then goes down its folders. Returns (the folder's ID, its path)."""
     from .. import google
 
-    return google.find_shared_drive(google.shared_drives(access), source["shared_drive"])
+    tops = [{"id": d["id"], "drive_id": d["id"], "path": d.get("name") or d["id"],
+             "label": f"{d.get('name') or d['id']} (shared drive)"} for d in google.shared_drives(access)]
+    tops += [{"id": f["id"], "drive_id": f.get("driveId") or "", "path": f["name"],
+              "label": f"{f['name']} (folder shared with you)"} for f in google.folders(access, shared=True)]
+    tops.append({"id": google.my_drive(access), "drive_id": "", "path": "My Drive", "label": "My Drive"})
+    trail: list[dict] = []  # the folders above `here`
+    here = _choose(ask, "folder_id: where are the vault's files", tops)
+    while True:
+        subs = [{"id": f["id"], "drive_id": here["drive_id"] or f.get("driveId") or "",
+                 "path": f"{here['path']}/{f['name']}", "label": f"{f['name']}/"}
+                for f in google.folders(access, here["id"], drive_id=here["drive_id"])]
+        if not subs and not trail:
+            return here["id"], here["path"]
+        use, back = {"id": "", "label": f"All of {here['path']}"}, {"id": "", "label": "(back)"}
+        picked = _choose(ask, f"{here['path']}: all of it, or a folder in it", [use, *subs, back])
+        if picked is use:
+            return here["id"], here["path"]
+        if picked is back:
+            here = trail.pop() if trail else _choose(ask, "folder_id: where are the vault's files", tops)
+        else:
+            trail.append(here)
+            here = picked
 
 
-def create(vault_id: str, source: dict, ask) -> tuple[dict, str]:
+def create(vault_id: str, source: dict, ask) -> tuple[dict, str, str]:
     """`vl vault create --source gdrive`, on an admin's computer: log in as the refresh job's
-    account, check it can only read and can open the shared drive. Without a shared_drive, asks
-    which one. Returns the [source] table and the refresh job's secret (the login's refresh token)."""
+    account, check it can only read and can open the folder. Without a folder_id, the person
+    picks one. Returns the [source] table, the refresh job's secret (the login's refresh token),
+    and what people call the folder."""
     from .. import google
     from ..util import say
 
     say("Log in to Google as the account the refresh job uses (we recommend a bot account). A browser opens.")
     refresh_token = google.login(source["google_client_id"], source["google_client_secret"])
     access = google.access_token(source["google_client_id"], source["google_client_secret"], refresh_token)
-    if not source.get("shared_drive"):
-        drives = google.shared_drives(access)
-        if not drives:
-            from ..util import VlError
-            raise VlError("This account isn't in any shared drive. Add it to one as a Viewer, then try again.")
-        say("This account can open these shared drives:")
-        source = {**source, "shared_drive": ask("shared_drive: the vault's notes come from which one",
-                                                [d.get("name") or d["id"] for d in drives])}
-    _drive_id(access, source)
-    return source, refresh_token
+    path = ""
+    if source.get("folder_id"):
+        source = {**source, "folder_id": folder_id_of(source["folder_id"]) or source["folder_id"]}
+    else:
+        say("This account can open:")
+        folder_id, path = _pick(access, ask)
+        source = {**source, "folder_id": folder_id}
+    place = google.find_folder(access, source["folder_id"])
+    if not path:
+        path = place["name"]
+        if place["drive_name"] and place["id"] != place["drive_id"]:
+            path += f", in {place['drive_name']}"
+    return source, refresh_token, " ".join(path.split())
 
 
 def fetch_changes(root: Path, source: dict, vault_id: str, secret, force: bool, staged: Path) -> str:
-    """The first half of a refresh, the only one with a login: list the drive, and download
+    """The first half of a refresh, the only one with a login: list the folder, and download
     the files that need new notes into `staged`. `secret()` gives the login's refresh token."""
     import tempfile
 
     from .. import google
 
     remote = remote_path(source)
-    if _test_remotes() and (source.get("shared_drive") or "").startswith("/"):
+    if _local(source.get("folder_id") or ""):
         return _fetch(root, source, remote, None, force, staged)  # a local folder, in tests
     token = secret()
     access = google.access_token(source["google_client_id"], source["google_client_secret"], token)
     google.check_read_only(access)
-    drive_id, _ = _drive_id(access, source)
+    place = google.find_folder(access, folder_id_of(source["folder_id"]))
     with tempfile.TemporaryDirectory(prefix="vl-gdrive-") as work:
         conf = os.path.join(work, "rclone.conf")
         fd = os.open(conf, os.O_WRONLY | os.O_CREAT, 0o600)
         with os.fdopen(fd, "w") as f:
-            f.write(rclone_config(source, drive_id, access, token))
+            f.write(rclone_config(source, place, access, token))
         return _fetch(root, source, remote, conf, force, staged)
 
 
@@ -786,7 +838,7 @@ def fetch(v, source: dict, short: str, path: str) -> Path:
         out = google.download(access, note.meta["id"], meta.get("mimeType") or "", dest)
     except google.NoAccess:
         raise VlError(f"You can read {short}, but your Google account can't open this file in Drive. "
-                      f"Ask for access to {source['shared_drive']}.") from None
+                      f"Ask for access to it: https://drive.google.com/drive/folders/{folder_id_of(source['folder_id'])}") from None
     os.utime(out)  # `vl sync` cleans by the time it was fetched
     out.chmod(0o444)
     return out

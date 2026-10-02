@@ -42,15 +42,16 @@ A source kind. `source` is the vault's [source] table, already checked:
   REQUIRED                                keys that must be set. `vl vault create` asks for
                                           the ones left out, at a terminal
   LATER                                   required keys that create() asks for itself, like
-                                          gdrive's shared_drive, picked after the login
+                                          gdrive's folder_id, picked after the login
   GUIDE                                   what you need before `vl vault create --source KIND`,
                                           and how to get it. Shown by --help, and when a
                                           required key is left out
   validate_source(source)                 -> ["key: problem", ...] (required)
-  create(vault_id, source, ask)           -> (source, secret): on an admin's computer, before
-                                             the vault's repo exists. `secret` is what the
-                                             refresh job logs in with. ask(question, choices=None)
-                                             asks the person for LATER keys (required)
+  create(vault_id, source, ask)           -> (source, secret, name): on an admin's computer,
+                                             before the vault's repo exists. `secret` is what
+                                             the refresh job logs in with; `name` is what people
+                                             call where the notes come from. ask(question,
+                                             choices=None) asks the person for LATER keys (required)
   SETUP_STEPS                             the refresh job's steps before the refresh (YAML)
   A refresh has two halves, so the code that converts files never runs with the login:
   fetch_changes(root, source, vault_id, secret, force, staged)
@@ -59,7 +60,8 @@ A source kind. `source` is the vault's [source] table, already checked:
                                              Reads `root`, changes nothing (required)
   convert(root, source, vault_id, staged) -> a status. Make the notes in `root` match the source,
                                              from what's in `staged`. No login (required)
-  default_about(source), comments(source) for the vault.toml vl writes
+  default_about(name), comments(source, name)
+                                          for the vault.toml vl writes
   fetch(vault, source, short, path)       -> the local copy of one original
   login(source), saved_login(source)     your own login on this computer (saved_login -> its
                                           token, or None), for fetching, and for refreshing

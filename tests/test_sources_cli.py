@@ -17,17 +17,18 @@ from vaultlines.plugins import gdrive
 from vaultlines.util import fetch_dir, refresh_dir, vaults_dir
 
 CLIENT = "1234-abc.apps.googleusercontent.com"
-SOURCE = f'''about = "The text of every file in the Mixim HQ shared drive. Claude only reads it."
+HQ = "0AHF8p0HI9kM1Uk9PVA"  # the shared drive Mixim HQ, in the fake Google
+SOURCE = f'''about = "The text of every file in Mixim HQ, in Google Drive. Claude only reads it."
 
 [source]
 kind                 = "gdrive"
-shared_drive         = "Mixim HQ"
-folder               = ""
+folder_id            = "{HQ}"
 max_size             = "50M"
 google_client_id     = "{CLIENT}"
 google_client_secret = "GOCSPX-x"
 '''
-CREATE = ["vault", "create", "mixim-ai/vault-hq", "--source", "gdrive", "--shared_drive", "Mixim HQ",
+CREATE = ["vault", "create", "mixim-ai/vault-hq", "--source", "gdrive",
+          "--folder_id", f"https://drive.google.com/drive/folders/{HQ}?usp=sharing",
           "--google_client_id", CLIENT, "--google_client_secret", "GOCSPX-x"]
 
 
@@ -78,10 +79,11 @@ def test_create_makes_the_vault_its_fill_job_and_secret(fake_github, computer, g
     shown = subprocess.run(["git", "--git-dir", str(bare), "show", "HEAD:vault.toml"], capture_output=True, text=True)
     info, problems = vaults.parse_vault_toml(shown.stdout)
     assert problems == []
-    assert info.about == "The text of every file in the Mixim HQ shared drive. Claude only reads it."
-    # Every key is exactly the flag that set it.
-    assert info.source == {"kind": "gdrive", "shared_drive": "Mixim HQ", "folder": "", "max_size": "50M",
+    assert info.about == "The text of every file in Mixim HQ, in Google Drive. Claude only reads it."
+    # Every key is the flag that set it; a folder's URL becomes its ID.
+    assert info.source == {"kind": "gdrive", "folder_id": HQ, "max_size": "50M",
                            "google_client_id": CLIENT, "google_client_secret": "GOCSPX-x"}
+    assert f'folder_id            = "{HQ}"   # Mixim HQ\n' in shown.stdout
     workflow = subprocess.run(["git", "--git-dir", str(bare), "show", "HEAD:.github/workflows/vl-source.yml"],
                               capture_output=True, text=True).stdout
     assert workflow == cli.source_workflow(gdrive)
@@ -94,19 +96,22 @@ def test_create_makes_the_vault_its_fill_job_and_secret(fake_github, computer, g
 def test_create_takes_every_key_of_the_kind(fake_github, computer, google_fake):
     fake_github.org("mixim-ai", ["alice"])
     vl("org", "join", "mixim-ai")
-    assert vl(*CREATE, "--folder", "Finance/2024", "--max_size", "10M", "--about", "Finance.") == 0
+    google_fake.folder("FIN", "Finance", parent=HQ, drive=HQ)
+    assert vl(*CREATE, "--folder_id", "FIN", "--max_size", "10M", "--about", "Finance.") == 0
     info = vaults.read("mixim-ai/vault-hq", vaults_dir() / "mixim-ai" / "vault-hq").info
-    assert (info.about, info.source["folder"], info.source["max_size"]) == ("Finance.", "Finance/2024", "10M")
+    assert (info.about, info.source["folder_id"], info.source["max_size"]) == ("Finance.", "FIN", "10M")
+    assert '"FIN"   # Finance, in Mixim HQ' in (vaults_dir() / "mixim-ai" / "vault-hq" / "vault.toml").read_text()
 
 
 def test_help_for_a_kind_lists_only_its_keys(capsys):
     assert vl("vault", "create", "--source", "gdrive", "--help") == 0
     out = capsys.readouterr().out
-    for key in ("--shared_drive", "--folder", "--max_size", "--google_client_id", "--google_client_secret"):
+    for key in ("--folder_id", "--max_size", "--google_client_id", "--google_client_secret"):
         assert key in out
+    assert "--shared_drive" not in out and "--folder " not in out
     assert vl("vault", "create", "--help") == 0
     out = capsys.readouterr().out
-    assert "--shared_drive" not in out and "--source KIND" in out and "gdrive" in out
+    assert "--folder_id" not in out and "--source KIND" in out and "gdrive" in out
 
 
 def test_help_for_a_kind_says_how_to_get_what_it_needs(capsys):
@@ -142,7 +147,7 @@ def test_create_without_a_terminal_says_what_is_missing_and_how_to_get_it(fake_g
     monkeypatch.setattr(util, "interactive", lambda: False)
     assert vl("vault", "create", "mixim-ai/vault-hq", "--source", "gdrive") == 1
     err = capsys.readouterr().err
-    assert "--shared_drive" in err and "--google_client_id" in err and "--google_client_secret" in err
+    assert "--folder_id" in err and "--google_client_id" in err and "--google_client_secret" in err
     assert "console.cloud.google.com/auth/clients" in err  # how to get them
     assert google_fake.requests == [] and "mixim-ai/vault-hq" not in fake_github.load()["repos"]
 
@@ -156,10 +161,10 @@ def test_create_asks_for_what_is_missing(fake_github, computer, google_fake, ans
     out = capsys.readouterr().out
     assert "console.cloud.google.com/auth/clients" in out  # the steps, before the questions
     assert "OWNER/vault-NAME" in asked[0] and "OWNER/vault-NAME" in asked[1] and "OWNER/vault-NAME" in out
-    assert "google_client_id" in asked[2] and "google_client_secret" in asked[3] and "shared_drive" in asked[4]
-    assert "1. Mixim HQ" in out and "2. Other" in out
+    assert "google_client_id" in asked[2] and "google_client_secret" in asked[3] and "folder" in asked[4]
+    assert "1. Mixim HQ (shared drive)" in out and "2. Other (shared drive)" in out and "3. My Drive" in out
     info = vaults.read("mixim-ai/vault-hq", vaults_dir() / "mixim-ai" / "vault-hq").info
-    assert info.source["shared_drive"] == "Mixim HQ"
+    assert info.source["folder_id"] == HQ  # it has no folders, so there's nothing more to ask
     assert (info.source["google_client_id"], info.source["google_client_secret"]) == (CLIENT, "GOCSPX-x")
 
 
@@ -176,11 +181,34 @@ def test_create_asks_again_for_a_bad_answer(fake_github, computer, google_fake, 
     fake_github.org("mixim-ai", ["alice"])
     vl("org", "join", "mixim-ai")
     given, asked = answers
-    given += ["", CLIENT, "3", "Other"]
+    given += ["", CLIENT, "9", "Other (shared drive)"]
     assert vl("vault", "create", "mixim-ai/vault-hq", "--source", "gdrive", "--google_client_secret", "s") == 0
     assert len(asked) == 4
     info = vaults.read("mixim-ai/vault-hq", vaults_dir() / "mixim-ai" / "vault-hq").info
-    assert info.source["shared_drive"] == "Other"
+    assert info.source["folder_id"] == "0BOTHER"
+
+
+def test_create_walks_the_folders_and_can_go_back(fake_github, computer, google_fake, answers, capsys):
+    fake_github.org("mixim-ai", ["alice"])
+    vl("org", "join", "mixim-ai")
+    google_fake.folder("FIN", "Finance", parent=HQ, drive=HQ)
+    google_fake.folder("F24", "2024", parent="FIN", drive=HQ)
+    google_fake.folder("LEGAL", "Legal", parent=HQ, drive=HQ)
+    google_fake.folder("BOARD", "Board decks", shared=True)
+    given, _ = answers
+    # Mixim HQ, Finance/, back up, Finance/ again, then all of it.
+    given += ["1", "2", "(back)", "Finance/", "1"]
+    assert vl("vault", "create", "mixim-ai/vault-hq", "--source", "gdrive", "--google_client_id", CLIENT,
+              "--google_client_secret", "s") == 0
+    out = capsys.readouterr().out
+    assert "3. Board decks (folder shared with you)" in out and "4. My Drive" in out
+    assert "1. All of Mixim HQ" in out and "2. Finance/" in out and "3. Legal/" in out
+    assert "1. All of Mixim HQ/Finance" in out and "2. 2024/" in out and "3. (back)" in out
+    path = vaults_dir() / "mixim-ai" / "vault-hq"
+    info = vaults.read("mixim-ai/vault-hq", path).info
+    assert info.source["folder_id"] == "FIN"
+    assert info.about == "The text of every file in Mixim HQ/Finance, in Google Drive. Claude only reads it."
+    assert '"FIN"   # Mixim HQ/Finance' in (path / "vault.toml").read_text()
 
 
 def test_create_asks_nothing_when_every_key_is_given(fake_github, computer, google_fake, answers, capsys):
@@ -192,9 +220,9 @@ def test_create_asks_nothing_when_every_key_is_given(fake_github, computer, goog
 
 @pytest.mark.parametrize("args, message", [
     (["--source", "nope"], "no source kind 'nope'. Kinds: gdrive"),
-    (["--source", "gdrive", "--shared_drive", "Nope", "--google_client_id", CLIENT, "--google_client_secret", "s"],
-     "No shared drive named 'Nope'"),
-    (CREATE[3:] + ["--folder", "../x"], "folder"),
+    (["--source", "gdrive", "--folder_id", "1NOPE", "--google_client_id", CLIENT, "--google_client_secret", "s"],
+     "This Google account can't open the folder 1NOPE"),
+    (CREATE[3:] + ["--folder_id", "Mixim HQ"], "folder_id: should be a Drive folder's URL or ID"),
     (CREATE[3:][:4] + ["--google_client_id", CLIENT], "Missing --google_client_secret"),
     (CREATE[3:] + ["--notes_from", "mixim-ai/marketing"], "a vault with a source can't take notes"),
 ])
@@ -260,7 +288,7 @@ def test_fetch_exports_google_files(hq, capsys):
 
 @pytest.mark.parametrize("path, message", [
     ("Legal/Secret.pdf", ("You can read mixim-ai-hq, but your Google account can't open this file in Drive. "
-                          "Ask for access to Mixim HQ.")),
+                          f"Ask for access to it: https://drive.google.com/drive/folders/{HQ}")),
     ("Nope.pdf", "No note in mixim-ai/vault-hq has the path 'Nope.pdf'"),
     ("../etc/passwd", "isn't a path inside the drive"),
 ])
@@ -355,8 +383,8 @@ def _local_drive(tmp_path):
     drive_folder = tmp_path / "drive"
     (drive_folder / "Team").mkdir(parents=True)
     (drive_folder / "Team" / "Plan.md").write_text("# Plan\n")
-    # In tests, shared_drive may be a local folder standing in for the drive.
-    return SOURCE.replace('"Mixim HQ"', json.dumps(str(drive_folder)))
+    # In tests, folder_id may be a local folder standing in for the drive.
+    return SOURCE.replace(f'"{HQ}"', json.dumps(str(drive_folder)))
 
 
 @needs_tools

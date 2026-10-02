@@ -390,12 +390,12 @@ def _create_with_source(args, vault_id: str, notes_from: list[str]) -> None:
         for key in missing:
             if key not in getattr(kind, "LATER", ()):
                 source[key] = util.ask(f"{key} ({kind.OPTIONS[key]})")
-    source, secret = kind.create(vault_id, source, util.ask)
+    source, secret, name = kind.create(vault_id, source, util.ask)
     problems = kind.validate_source(source)
     if problems:
         raise VlError("; ".join(problems))
-    about = args.about or (kind.default_about(source) if hasattr(kind, "default_about") else "")
-    comments = kind.comments(source) if hasattr(kind, "comments") else None
+    about = args.about or (kind.default_about(name) if hasattr(kind, "default_about") else "")
+    comments = kind.comments(source, name) if hasattr(kind, "comments") else None
     path = vlt.path_of(vault_id)
     try:
         path.mkdir(parents=True)

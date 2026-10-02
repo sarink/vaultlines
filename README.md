@@ -74,12 +74,12 @@ Who can use a published vault is who can access its repo on GitHub. To give some
 
 ## Sources
 
-A vault's notes can come from a **source**, like a Google Drive shared drive. It then holds one note for each file in the source: the file's text, and where the original is. Its **refresh job**, a GitHub Action, refreshes it every hour. In Claude sessions, the vault is read-only.
+A vault's notes can come from a **source**, like a Google Drive folder. It then holds one note for each file in the source: the file's text, and where the original is. Its **refresh job**, a GitHub Action, refreshes it every hour. In Claude sessions, the vault is read-only.
 
 Make a vault with a source (for admins, once, on any computer):
 
 ```bash
-vl vault create acme/vault-hq --source gdrive --shared_drive "Acme HQ" \
+vl vault create acme/vault-hq --source gdrive \
   --google_client_id 1234-abc.apps.googleusercontent.com --google_client_secret GOCSPX-...
 ```
 
@@ -100,26 +100,39 @@ vl source refresh --convert-only                     # without it: write the not
 
 To start the refresh job on GitHub now: `gh workflow run vl-source.yml --repo acme/vault-hq`.
 
-### Kind `gdrive`: a Google Drive shared drive
+### Kind `gdrive`: a Google Drive folder
 
 | Key | What it is |
 |---|---|
-| `shared_drive` | The shared drive's name (or ID). |
-| `folder` | Only this folder of the drive. Default: the whole drive. |
+| `folder_id` | The folder, or a whole shared drive. `--folder_id` takes its URL (like `https://drive.google.com/drive/folders/1AbC…`) or its ID. Leave it out and `vl` lists them. |
 | `max_size` | Bigger files get a note without text. Default: `"50M"`. |
 | `google_client_id` | The client ID of a Google OAuth app of type "Desktop". |
 | `google_client_secret` | Its secret. Google doesn't treat a desktop app's secret as secret. |
 
-Before you start, you need two things. Log in to Google with your Workspace account, not a personal Gmail account.
+Before you start, you need two things. A Google Workspace account and a personal Gmail account both work.
 
 1. **A Google OAuth app** (about 5 minutes):
-   1. Make a project: <https://console.cloud.google.com/projectcreate>. For "Location", pick your organization.
+   1. Make a project: <https://console.cloud.google.com/projectcreate>. With Workspace, for "Location", pick your organization.
    2. Turn on the Drive API: <https://console.cloud.google.com/apis/library/drive.googleapis.com>, then "Enable".
-   3. Set up the login screen: <https://console.cloud.google.com/auth/overview>, then "Get started". Audience: "Internal".
+   3. Set up the login screen: <https://console.cloud.google.com/auth/overview>, then "Get started". With Workspace, Audience: "Internal". With a personal Gmail account, Audience: "External", then "Publish app" on the "Audience" page. While the app is "Testing", Google ends each login after 7 days.
    4. Make the client: <https://console.cloud.google.com/auth/clients>, then "Create client". Application type: "Desktop app". Google then shows the client ID and the client secret.
-2. **A Google account for the refresh job.** We recommend a bot account: make a user at <https://admin.google.com> (Directory > Users), and add it to the shared drive as a "Viewer", and to no other shared drive. Any account works, like your own. But anyone who can push to the vault's repo can use its login to read everything that account can read in Drive.
+2. **A Google account for the refresh job.** We recommend a bot account that can open only the vault's folder: make a user at <https://admin.google.com> (Directory > Users), or a new Gmail account. Share the folder with it as a "Viewer" (or add it to the shared drive as a "Viewer"), and share nothing else with it. Any account works, like your own. But anyone who can push to the vault's repo can use its login to read everything that account can read in Drive.
 
-`vl vault create` asks you to log in as that account. It checks that the login can only read Drive. If you left out `--shared_drive`, it lists the account's shared drives and asks which one. Everyone who can read the vault reads the text of every file in the shared drive.
+`vl vault create` asks you to log in as that account. It checks that the login can only read Drive. If you left out `--folder_id`, it lists what the account can open by name: its shared drives, the folders shared with it, and My Drive. You pick one, then go down its folders:
+
+```
+This account can open:
+  1. Acme HQ (shared drive)
+  2. My Drive
+folder_id: where are the vault's files: 1
+  1. All of Acme HQ
+  2. Finance/
+  3. Legal/
+  4. (back)
+Acme HQ: all of it, or a folder in it: 2
+```
+
+`vault.toml` gets the folder's ID, with its name as a comment. Everyone who can read the vault reads the text of every file in the folder.
 
 A note looks like this:
 

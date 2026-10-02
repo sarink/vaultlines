@@ -73,12 +73,51 @@ def test_a_fake_google_must_be_on_this_computer(monkeypatch, url):
     assert google.urls()["token"] == "https://oauth2.googleapis.com/token"
 
 
+@pytest.fixture
+def folders(fake):
+    """Mixim HQ (a shared drive) with Finance/2024, a folder shared with the account, and one
+    in its My Drive."""
+    fake.folder("FIN", "Finance", parent="0AHF8p0HI9kM1Uk9PVA", drive="0AHF8p0HI9kM1Uk9PVA")
+    fake.folder("F24", "2024", parent="FIN", drive="0AHF8p0HI9kM1Uk9PVA")
+    fake.folder("BOARD", "Board decks", shared=True)
+    fake.folder("MINE", "Recipes", parent="MYDRIVE")
+    fake.file("PDF1", "a.pdf", "application/pdf")
+    return fake
+
+
 def test_shared_drives(fake):
-    drives = google.shared_drives(ACCESS)
-    assert google.find_shared_drive(drives, "Mixim HQ") == ("0AHF8p0HI9kM1Uk9PVA", "Mixim HQ")
-    assert google.find_shared_drive(drives, "0BOTHER") == ("0BOTHER", "Other")
-    with pytest.raises(VlError, match="No shared drive named 'Nope'. This account has: 'Mixim HQ', 'Other'"):
-        google.find_shared_drive(drives, "Nope")
+    assert [d["name"] for d in google.shared_drives(ACCESS)] == ["Mixim HQ", "Other"]
+
+
+def names(found):
+    return [(f["id"], f["name"]) for f in found]
+
+
+def test_folders_in_a_drive_a_folder_or_shared_with_the_account(folders):
+    assert names(google.folders(ACCESS, "0AHF8p0HI9kM1Uk9PVA", drive_id="0AHF8p0HI9kM1Uk9PVA")) == [("FIN", "Finance")]
+    assert names(google.folders(ACCESS, "FIN", drive_id="0AHF8p0HI9kM1Uk9PVA")) == [("F24", "2024")]
+    assert names(google.folders(ACCESS, shared=True)) == [("BOARD", "Board decks")]
+    assert names(google.folders(ACCESS, google.my_drive(ACCESS))) == [("MINE", "Recipes")]
+    assert google.my_drive(ACCESS) == "MYDRIVE"
+
+
+@pytest.mark.parametrize("wanted, place", [
+    ("0AHF8p0HI9kM1Uk9PVA", {"id": "0AHF8p0HI9kM1Uk9PVA", "name": "Mixim HQ", "drive_id": "0AHF8p0HI9kM1Uk9PVA",
+                             "drive_name": "Mixim HQ"}),
+    ("F24", {"id": "F24", "name": "2024", "drive_id": "0AHF8p0HI9kM1Uk9PVA", "drive_name": "Mixim HQ"}),
+    ("BOARD", {"id": "BOARD", "name": "Board decks", "drive_id": "", "drive_name": ""}),
+])
+def test_find_a_folder_or_shared_drive_by_id(folders, wanted, place):
+    assert google.find_folder(ACCESS, wanted) == place
+
+
+@pytest.mark.parametrize("wanted, message", [
+    ("PDF1", "PDF1 is a file, not a folder"),
+    ("NOPE", "This Google account can't open the folder NOPE"),
+])
+def test_find_a_folder_refuses(folders, wanted, message):
+    with pytest.raises(VlError, match=message):
+        google.find_folder(ACCESS, wanted)
 
 
 def test_download_a_file(fake, tmp_path):

@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 READONLY = "https://www.googleapis.com/auth/drive.readonly"
 ACCESS = "ya29.SECRET-ACCESS"
 REFRESH = "1//SECRET-REFRESH"
+FOLDER = "application/vnd.google-apps.folder"
 GOOGLE_TYPES = {
     "application/vnd.google-apps.document": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "application/vnd.google-apps.spreadsheet": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -29,7 +31,8 @@ class FakeGoogle:
         self.scope = READONLY
         self.client_id = "1234-abc.apps.googleusercontent.com"
         self.drives = [{"id": "0AHF8p0HI9kM1Uk9PVA", "name": "Mixim HQ"}, {"id": "0BOTHER", "name": "Other"}]
-        self.files: dict[str, dict] = {}  # id -> {"name", "mimeType", "data", "status"}
+        self.files: dict[str, dict] = {}  # id -> {"name", "mimeType", "data", "status", folders: "parent", ...}
+        self.folder("MYDRIVE", "My Drive")  # the account's own My Drive
         self.requests: list[str] = []
         self._challenges: dict[str, str] = {}
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
@@ -41,6 +44,30 @@ class FakeGoogle:
 
     def file(self, file_id: str, name: str, mime: str, data: bytes = b"", status: int = 200):
         self.files[file_id] = {"name": name, "mimeType": mime, "data": data, "status": status}
+
+    def folder(self, folder_id: str, name: str, parent: str = "", drive: str = "", shared: bool = False):
+        """A folder: in `parent` (a folder or shared drive ID), in the shared drive `drive`, or
+        shared with the account (`shared`)."""
+        self.files[folder_id] = {"name": name, "mimeType": FOLDER, "data": b"", "status": 200, "parent": parent,
+                                 "driveId": drive, "shared": shared}
+
+    def _list(self, q: dict) -> list[dict]:
+        """files.list, for folders: `'ID' in parents` or `sharedWithMe`."""
+        assert q.get("supportsAllDrives") == "true" and q.get("includeItemsFromAllDrives") == "true"
+        assert "mimeType = 'application/vnd.google-apps.folder'" in q["q"] and "trashed = false" in q["q"]
+        parent = re.search(r"'([^']+)' in parents", q["q"])
+        if parent and parent.group(1) == "root":
+            parent = "MYDRIVE"
+        elif parent:
+            parent = parent.group(1)
+            drive = next((d["id"] for d in self.drives if d["id"] == parent), None) or \
+                (self.files.get(parent) or {}).get("driveId")
+            if drive:  # a shared drive's folders are listed from that drive
+                assert (q.get("corpora"), q.get("driveId")) == ("drive", drive), q
+        out = [{"id": i, "name": f["name"], **({"driveId": f["driveId"]} if f.get("driveId") else {})}
+               for i, f in self.files.items() if f["mimeType"] == FOLDER
+               and (f.get("parent") == parent if parent else ("sharedWithMe" in q["q"] and f.get("shared")))]
+        return sorted(out, key=lambda f: f["name"])
 
     def _handler(self):
         fake = self
@@ -82,8 +109,14 @@ class FakeGoogle:
                     return self._json(401, {"error": "unauthorized"})
                 if url.path == "/drive/v3/drives":
                     return self._json(200, {"drives": fake.drives})
-                parts = url.path.split("/")  # /drive/v3/files/ID[/export]
+                parts = url.path.split("/")  # /drive/v3/files/ID[/export], /drive/v3/drives/ID
+                if url.path.startswith("/drive/v3/drives/"):
+                    d = next((d for d in fake.drives if d["id"] == parts[4]), None)
+                    return self._json(200, d) if d else self._json(404, {"error": {"code": 404}})
+                if url.path == "/drive/v3/files":
+                    return self._json(200, {"files": fake._list(q)})
                 if url.path.startswith("/drive/v3/files/"):
+                    parts[4] = "MYDRIVE" if parts[4] == "root" else parts[4]
                     f = fake.files.get(parts[4])
                     if f is None:
                         return self._json(404, {"error": {"code": 404, "message": "File not found"}})
@@ -96,7 +129,8 @@ class FakeGoogle:
                     if q.get("alt") == "media":
                         return self._send(200, f["data"], f["mimeType"])
                     return self._json(200, {"id": parts[4], "name": f["name"], "mimeType": f["mimeType"],
-                                            "size": str(len(f["data"]))})
+                                            "size": str(len(f["data"])),
+                                            **({"driveId": f["driveId"]} if f.get("driveId") else {})})
                 return self._json(404, {"error": "unknown"})
 
             def do_POST(self):

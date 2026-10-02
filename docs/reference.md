@@ -31,14 +31,13 @@ Every kind works the same way:
 
 | Key | What it is |
 |---|---|
-| `shared_drive` | The shared drive's name (or ID). The refresh job looks up its ID on each refresh. |
-| `folder` | Only this folder of the drive (default `""`: all of it). |
+| `folder_id` | The ID of a folder, or of a whole shared drive. `--folder_id` also takes the folder's URL. On each refresh, vl asks Google which it is, and sets up rclone to match. |
 | `max_size` | Bigger files get a note without text (default `"50M"`). |
 | `google_client_id`, `google_client_secret` | The Google OAuth app (desktop type). Its secret isn't secret: Google says so for desktop apps. |
 
-`vl vault create --source gdrive` asks at a terminal for the keys left out: the client ID and secret first (after showing how to make them), then, once the refresh job's account has logged in, the shared drive, picked from that account's list. Without a terminal, it stops and prints the steps. `vl vault create --source gdrive --help` prints them too.
+`vl vault create --source gdrive` asks at a terminal for the keys left out: the client ID and secret first (after showing how to make them), then, once the refresh job's account has logged in, the folder: it lists the account's shared drives, the folders shared with it, and My Drive, by name, then the folders inside the one picked, with "All of …" and "(back)". `vault.toml` gets the ID, with the folder's path as a comment. Without a terminal, it stops and prints the steps. `vl vault create --source gdrive --help` prints them too.
 
-`VL_SOURCE_TOKEN` is that account's read-only refresh token (we recommend a bot account that can open only this shared drive). Each fetch checks with Google that the login can only read, lists the drive, and downloads new and changed files, at most 5 GB in one refresh; the rest waits for the next one. The convert turns them into text with markitdown, without the token in its environment, and writes one note per file. Notes keep keys that others added to their frontmatter.
+`VL_SOURCE_TOKEN` is that account's read-only refresh token (we recommend a bot account that can open only this folder). Each fetch checks with Google that the login can only read, lists the folder, and downloads new and changed files, at most 5 GB in one refresh; the rest waits for the next one. The convert turns them into text with markitdown, without the token in its environment, and writes one note per file. Notes keep keys that others added to their frontmatter.
 
 `vl source fetch VAULT PATH` finds the note whose frontmatter `path` is PATH and downloads the file by its Drive ID, so renames don't break it. Google's own files are exported: Docs to `.docx`, Sheets to `.xlsx`, Slides to `.pptx`, Drawings to `.pdf`. It uses your own read-only Google login (`vl source login VAULT`), kept in `~/.vaultlines/google/`.
 
@@ -120,8 +119,8 @@ Plugins are built in. Basic Memory (`plugins/basic_memory.py`) answers for its t
 
 - **Read-only access hides the audience.** GitHub only lists a private repo's collaborators to people who can push. Someone with read access to a vault with a source gets "unknown" for it, so after reading it, shared writes ask.
 - **GitHub Actions minutes.** Each hourly refresh takes a minute or two.
-- **A bot account** for the refresh job needs a Google Workspace seat, and should be a member of the shared drive only. With any other account, anyone who can push to the vault's repo can read everything that account can read in Drive.
+- **A bot account** for the refresh job needs a Google Workspace seat, or is a Gmail account. It should be able to open only the vault's folder. With any other account, anyone who can push to the vault's repo can read everything that account can read in Drive.
 
 ## Tests
 
-`uv run pytest -q` and `tests/e2e.sh`. Tests set `VAULTLINES_HOME` (in place of `~/.vaultlines`), `VAULTLINES_FAKE_GITHUB` (a JSON file and bare repos, with `VAULTLINES_FAKE_LOGIN`), `VAULTLINES_FAKE_GOOGLE` (a fake Google on 127.0.0.1), and `VAULTLINES_TEST_REMOTES=1` (`file://` remotes count as GitHub, and a local folder as a shared drive).
+`uv run pytest -q` and `tests/e2e.sh`. Tests set `VAULTLINES_HOME` (in place of `~/.vaultlines`), `VAULTLINES_FAKE_GITHUB` (a JSON file and bare repos, with `VAULTLINES_FAKE_LOGIN`), `VAULTLINES_FAKE_GOOGLE` (a fake Google on 127.0.0.1), and `VAULTLINES_TEST_REMOTES=1` (`file://` remotes count as GitHub, and a local folder as `folder_id`).

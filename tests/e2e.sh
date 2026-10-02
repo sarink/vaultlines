@@ -1,7 +1,7 @@
 #!/bin/bash
 # End-to-end test on two fake computers, "alice" and "bob", in the fake GitHub org mixim-ai.
 # A JSON file and bare repos stand in for GitHub, a local server for Google, and a local
-# folder for the shared drive. Touches nothing outside a temporary folder. Needs git, jq,
+# folder for the Drive folder. Touches nothing outside a temporary folder. Needs git, jq,
 # uv and claude (and rclone for the Drive section, which is skipped without it).
 #
 #   tests/e2e.sh            run and clean up
@@ -89,12 +89,11 @@ mkdir -p "$DRIVE/Team Docs" "$DRIVE/Finance"
 echo "# Plan" > "$DRIVE/Team Docs/Plan.md"
 cp "$REPO/tests/fixtures/sample.xlsx" "$DRIVE/Finance/Runway.xlsx"
 printf 'PK\005\006' > "$DRIVE/old.zip"
-repo mixim-ai/vault-hq '{"push": ["alice"], "read": ["bob"]}' vault.toml "about = \"The text of every file in the Mixim HQ shared drive. Claude only reads it.\"
+repo mixim-ai/vault-hq '{"push": ["alice"], "read": ["bob"]}' vault.toml "about = \"The text of every file in Mixim HQ, in Google Drive. Claude only reads it.\"
 
 [source]
 kind                 = \"gdrive\"
-shared_drive         = \"$DRIVE\"
-folder               = \"\"
+folder_id            = \"$DRIVE\"
 max_size             = \"50M\"
 google_client_id     = \"1234-abc.apps.googleusercontent.com\"
 google_client_secret = \"GOCSPX-x\"

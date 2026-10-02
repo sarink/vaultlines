@@ -32,6 +32,7 @@ from .util import VlError, google_dir
 
 SCOPE = "https://www.googleapis.com/auth/drive.readonly"
 READ_ONLY_SCOPES = {SCOPE, "https://www.googleapis.com/auth/drive.metadata.readonly"}
+FOLDER = "application/vnd.google-apps.folder"
 # Google's own files are exported: Docs, Sheets and Slides to Office files, Drawings to PDF.
 EXPORTS = {
     "application/vnd.google-apps.document":
@@ -235,13 +236,54 @@ def shared_drives(access: str) -> list[dict]:
             return out
 
 
-def find_shared_drive(drives: list[dict], wanted: str) -> tuple[str, str]:
-    """(ID, name) of the shared drive named or with the ID `wanted`."""
-    for d in drives:
-        if wanted in (d.get("id"), d.get("name")):
-            return d["id"], d.get("name") or d["id"]
-    names = ", ".join(repr(d.get("name")) for d in drives) or "none"
-    raise VlError(f"No shared drive named {wanted!r}. This account has: {names}")
+def folders(access: str, parent: str | None = None, drive_id: str = "", shared: bool = False) -> list[dict]:
+    """[{"id", "name", maybe "driveId"}] of the folders in `parent` (a folder or a shared
+    drive; `drive_id` is the shared drive it's in), or, with `shared`, of the folders shared
+    with the account. By name."""
+    q = "mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+    q = f"'{parent}' in parents and {q}" if parent else f"sharedWithMe and {q}"
+    params = {"q": q, "fields": "nextPageToken,files(id,name,driveId)", "orderBy": "name", "pageSize": "1000",
+              "supportsAllDrives": "true", "includeItemsFromAllDrives": "true"}
+    if parent and drive_id:
+        params.update(corpora="drive", driveId=drive_id)
+    out, page = [], None
+    while True:
+        data = _drive("files", access, **params, **({"pageToken": page} if page else {}))
+        out += data.get("files", [])
+        page = data.get("nextPageToken")
+        if not page:
+            return out
+
+
+def my_drive(access: str) -> str:
+    """The ID of the account's own My Drive."""
+    return _drive("files/root", access, fields="id", supportsAllDrives="true")["id"]
+
+
+def find_folder(access: str, folder_id: str) -> dict:
+    """{"id", "name", "drive_id", "drive_name"} of a folder or a shared drive, by its ID.
+    `drive_id` is the shared drive it's in (itself, for a shared drive), or "" for My Drive."""
+    quoted = urllib.parse.quote(folder_id)
+    try:
+        d = _drive(f"drives/{quoted}", access)
+        name = d.get("name") or folder_id
+        return {"id": d["id"], "name": name, "drive_id": d["id"], "drive_name": name}
+    except NoAccess:
+        pass  # not a shared drive
+    try:
+        f = _drive(f"files/{quoted}", access, fields="id,name,mimeType,driveId", supportsAllDrives="true")
+    except NoAccess:
+        raise VlError(f"This Google account can't open the folder {folder_id}. Share the folder with it, "
+                      "or add it to the folder's shared drive.") from None
+    if f.get("mimeType") != FOLDER:
+        raise VlError(f"{folder_id} is a file, not a folder.")
+    drive_id, drive_name = f.get("driveId") or "", ""
+    if drive_id:
+        try:
+            drive_name = _drive(f"drives/{urllib.parse.quote(drive_id)}", access).get("name") or ""
+        except NoAccess:
+            pass  # a folder shared from a shared drive the account isn't in
+    return {"id": f["id"], "name": f.get("name") or folder_id, "drive_id": drive_id, "drive_name": drive_name}
 
 
 def file_meta(access: str, file_id: str) -> dict:
