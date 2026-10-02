@@ -216,3 +216,34 @@ def test_entries_notes_from_already_covers_are_left_out(old, fake_github):
     workspace = cfg.repos["mixim-ai/mixim-workspace"]
     assert (workspace.writes, workspace.auto_pull) == (None, True)  # kept for auto_pull only
     assert runtime.load()["repos"]["mixim-ai/mixim-workspace"] == {"writes": None, "reads": []}
+
+
+def test_basic_memory_projects_get_the_new_names(old, monkeypatch):
+    from vaultlines import claude
+    from vaultlines.plugins import basic_memory as bm
+    from vaultlines.util import VlError
+
+    cfg = old / ".config" / "vaultlines" / "config.toml"
+    cfg.write_text(cfg.read_text() + '\n[plugins.basic-memory]\nkind = "basic-memory"\n')
+    projects = {"personal": (old / "Vaults" / "personal").resolve(), "mixim-private": (old / "Vaults" / "mixim-private").resolve()}
+    default = ["personal"]
+
+    def remove(settings, name):
+        if name == default[0]:
+            raise VlError("Cannot delete default project")
+        projects.pop(name, None)
+
+    monkeypatch.setattr(bm, "projects", lambda settings: dict(projects))
+    def ensure(settings, name, path, current=None):
+        projects[name] = path.resolve()
+        if current is not None:
+            current[name] = path.resolve()
+
+    monkeypatch.setattr(bm, "ensure_project", ensure)
+    monkeypatch.setattr(bm, "remove_project", remove)
+    monkeypatch.setattr(bm, "set_default", lambda settings, name: default.__setitem__(0, name))
+    monkeypatch.setattr(bm, "plugin_installed", lambda: True)
+    monkeypatch.setattr(claude, "add_server", lambda *a, **k: None)
+    assert vl(*ARGS) == 0
+    assert "personal" not in projects and "mixim-private" not in projects
+    assert default == ["alice-personal"] and "mixim-ai-private" in projects

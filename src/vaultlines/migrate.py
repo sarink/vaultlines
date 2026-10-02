@@ -319,20 +319,27 @@ def _old_blocks(old: Old) -> None:
             claude.update_settings(Path(path), None)
 
 
-def _old_projects(old: Old, moved: list[Move]) -> None:
-    """Basic Memory knows the vaults by their old names and folders. `vl apply` registers the new ones."""
+def _old_projects(old: Old, moved: list[Move]) -> list[str]:
+    """Basic Memory knew the vaults by their old names and folders. Runs after `vl apply`
+    registered the new names (and the new default, which Basic Memory won't remove).
+    Returns problems."""
     from .plugins import basic_memory as bm
 
     if not old.basic_memory:
-        return
+        return []
     settings = {"kind": "basic-memory"}
+    problems = []
     try:
         current = bm.projects(settings)
-    except VlError:
-        return
+    except VlError as e:
+        return [f"couldn't list Basic Memory projects: {e}"]
     for m in moved:
-        if m.old.name in current:
-            bm.remove_project(settings, m.old.name)
+        if m.old.name in current and current[m.old.name] == m.old.path.resolve():
+            try:
+                bm.remove_project(settings, m.old.name)
+            except VlError as e:
+                problems.append(f"remove the old Basic Memory project '{m.old.name}' by hand: {str(e).splitlines()[-1]}")
+    return problems
 
 
 def _moved_note(folders: list[Path]) -> None:
@@ -365,7 +372,6 @@ def migrate(args) -> None:
     audience.save_state(state)
     _copy_state(old)
     moved = [m for m in plan.moves if m.target]
-    _old_projects(old, moved)
     paths = {}
     for m in moved:
         paths[str(m.old.path)] = str(vlt.path_of(m.target))
@@ -386,8 +392,11 @@ def migrate(args) -> None:
         launchd.install(config.load_file().sync_interval)
     _moved_note([old.config_dir, old.state_dir, old.cache_dir, old.vaults_dir])
     _apply(config.load())
+    problems = _old_projects(old, moved)
 
     say("\nDone. Your vaults are in ~/.vaultlines/vaults. See `vl status`.")
+    for p in problems:
+        say(f"  {p}")
     waiting = [m for m in plan.moves if m.how == "stay"]
     if waiting:
         say("Still to do:")
