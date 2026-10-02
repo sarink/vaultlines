@@ -773,7 +773,7 @@ def cmd_status(args) -> None:
     shorts = cfg.shorts
     gone = lost(cfg)
     data = runtime.load() or {}
-    owners = sorted({v.owner for v in cfg.vaults.values()} | set(cfg.owners), key=lambda o: (o != me, o == "local", o))
+    owners = sorted({v.owner for v in cfg.vaults.values()} | set(cfg.owners), key=lambda o: (o != me, o))
     for owner in owners:
         say(_owner_title(owner, me))
         rows = [("vault", "name", "state", "who can see it")]
