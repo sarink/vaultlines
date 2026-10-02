@@ -72,7 +72,7 @@ vl sync [VAULT] [--check-github]
 vl status | doctor | apply | sessions [--limit N] | uninstall
 ```
 
-A `VAULT` is `OWNER/vault-NAME` or its short name, like `mixim-ai-hq`. Flags that set a key of `vault.toml` are spelled like the key.
+A `VAULT` is `OWNER/vault-NAME` or its short name, like `acme-hq`. Flags that set a key of `vault.toml` are spelled like the key.
 
 ## Discovery
 
@@ -100,13 +100,13 @@ The first session in a new clone counts the vault Basic Memory may have briefed 
 
 ```json
 {"version": 4, "me": "kabir", "on_leak": "ask",
- "vaults": {"mixim-ai-public": {"id": "mixim-ai/vault-public", "paths": ["…/vaults/mixim-ai/vault-public"],
-                                "about": "…", "audience": {"kind": "people", "logins": ["kabir", "jorge"]}},
-            "mixim-ai-hq": {"id": "mixim-ai/vault-hq", "source": "gdrive", "fetch": ["…/cache/fetch/mixim-ai/vault-hq"]}},
- "owners": {"mixim-ai": {"personal": "mixim-ai-kabir-personal", "vaults": ["mixim-ai-public", "…"],
-                         "notes_from": {"mixim-ai/marketing": "mixim-ai-public"},
-                         "conflicts": {"mixim-ai/both": ["mixim-ai-private", "mixim-ai-public"]}}},
- "repos": {"mixim-ai/postal": {"writes": "mixim-ai-public", "reads": []}},
+ "vaults": {"acme-public": {"id": "acme/vault-public", "paths": ["…/vaults/acme/vault-public"],
+                                "about": "…", "audience": {"kind": "people", "logins": ["kabir", "lee"]}},
+            "acme-hq": {"id": "acme/vault-hq", "source": "gdrive", "fetch": ["…/cache/fetch/acme/vault-hq"]}},
+ "owners": {"acme": {"personal": "acme-kabir-personal", "vaults": ["acme-public", "…"],
+                         "notes_from": {"acme/marketing": "acme-public"},
+                         "conflicts": {"acme/both": ["acme-private", "acme-public"]}}},
+ "repos": {"acme/website": {"writes": "acme-public", "reads": []}},
  "folders": {"/Users/kabir/Documents/writing": {"writes": "local-recipes", "reads": []}},
  "default": {"writes": "kabir-personal", "reads": []},
  "plugins": {"basic-memory": {"kind": "basic-memory", "tool_prefixes": ["mcp__basic-memory__"], "data": {}}}}

@@ -27,7 +27,7 @@ def make(tmp_path, monkeypatch) -> Config:
 
 def test_build_v4(tmp_path, monkeypatch):
     cfg = make(tmp_path, monkeypatch)
-    cfg.repos["mixim-ai/postal"] = Rule("mixim-ai/postal", "mixim-ai/vault-public", ["kabir/vault-recipes"], True)
+    cfg.repos["mixim-ai/website"] = Rule("mixim-ai/website", "mixim-ai/vault-public", ["kabir/vault-recipes"], True)
     cfg.folders[str(tmp_path / "writing")] = Rule(str(tmp_path / "writing"), "kabir/vault-recipes", [])
     warnings = []
     auds = {"mixim-ai/vault-public": Audience("people", ("kabir", "ana"))}
@@ -54,7 +54,7 @@ def test_build_v4(tmp_path, monkeypatch):
     assert mixim["conflicts"] == {"mixim-ai/studio": ["mixim-ai-private", "mixim-ai-public"]}
     assert out["owners"]["kabir"] == {"personal": "kabir-personal", "vaults": ["kabir-personal", "kabir-recipes"],
                                       "notes_from": {}, "conflicts": {}}
-    assert out["repos"] == {"mixim-ai/postal": {"writes": "mixim-ai-public", "reads": ["kabir-recipes"]}}
+    assert out["repos"] == {"mixim-ai/website": {"writes": "mixim-ai-public", "reads": ["kabir-recipes"]}}
     assert out["folders"] == {str(tmp_path / "writing"): {"writes": "kabir-recipes", "reads": []}}
     assert out["default"] == {"writes": "kabir-personal", "reads": []}
     assert out["plugins"]["basic-memory"]["tool_prefixes"] == ["mcp__basic-memory__"]

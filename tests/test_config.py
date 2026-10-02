@@ -9,7 +9,7 @@ GOOD = """
 sync_interval  = 300
 on_leak        = "block"
 
-[repos."mixim-ai/postal"]
+[repos."mixim-ai/website"]
 writes    = "mixim-ai/vault-public"
 reads     = ["kabir/vault-recipes"]
 auto_pull = true
@@ -49,7 +49,7 @@ def test_the_template_is_only_comments_and_loads_as_the_defaults(home):
     config.write_template()
     text = config.config_path().read_text()
     assert all(line.startswith("#") or not line.strip() for line in text.splitlines())
-    assert '# [repos."acme/postal"]' in text
+    assert '# [repos."acme/website"]' in text
     cfg = config.load_file()
     assert (cfg.repos, cfg.folders) == ({}, {})
     config.write_template()  # never replaces your file
@@ -71,7 +71,7 @@ def test_uncommenting_the_template_examples_gives_a_good_config(home):
             lines.append(line)
     path.write_text("\n".join(lines) + "\n")
     cfg = config.load_file()
-    assert cfg.repos["acme/postal"].writes == "acme/vault-public"
+    assert cfg.repos["acme/website"].writes == "acme/vault-public"
     assert cfg.folders[str(home / "Documents" / "writing")].writes == "kabir/vault-recipes"
 
 
@@ -79,8 +79,8 @@ def test_load_a_good_config(home):
     write(home, GOOD)
     cfg = config.load_file()
     assert (cfg.sync_interval, cfg.on_leak) == (300, "block")
-    postal = cfg.repos["mixim-ai/postal"]
-    assert (postal.writes, postal.reads, postal.auto_pull) == ("mixim-ai/vault-public", ["kabir/vault-recipes"], True)
+    website = cfg.repos["mixim-ai/website"]
+    assert (website.writes, website.reads, website.auto_pull) == ("mixim-ai/vault-public", ["kabir/vault-recipes"], True)
     assert cfg.repos["mixim-ai/*"].writes is None
     writing = cfg.folders[str(home / "Documents" / "writing")]
     assert (writing.writes, writing.reads) == ("kabir/vault-recipes", [])
@@ -88,8 +88,8 @@ def test_load_a_good_config(home):
 
 
 def test_repo_names_ignore_case(home):
-    write(home, '[repos."Mixim-AI/Postal"]\nwrites = "Mixim-AI/vault-public"\n')
-    assert config.load_file().repos["mixim-ai/postal"].writes == "mixim-ai/vault-public"
+    write(home, '[repos."Mixim-AI/Website"]\nwrites = "Mixim-AI/vault-public"\n')
+    assert config.load_file().repos["mixim-ai/website"].writes == "mixim-ai/vault-public"
 
 
 @pytest.mark.parametrize("old, new, message", [
@@ -99,7 +99,7 @@ def test_repo_names_ignore_case(home):
     ("sync_interval  = 300", "colour = 1", "colour: unknown key"),
     ("sync_interval  = 300", "basic_memory = 1", "basic_memory: should be true or false"),
     ("sync_interval  = 300", '[vaults."kabir/vault-recipes"]', "vaults: unknown key"),
-    ('[repos."mixim-ai/postal"]', '[repos."postal"]', "OWNER/REPO"),
+    ('[repos."mixim-ai/website"]', '[repos."website"]', "OWNER/REPO"),
     ('[repos."mixim-ai/*"]', '[repos."*/*"]', "OWNER/REPO"),
     ('writes    = "mixim-ai/vault-public"', 'writes = "vault-public"', "OWNER/REPO"),
     ('writes    = "mixim-ai/vault-public"', 'writes = ["mixim-ai/vault-public"]', "should be one vault"),

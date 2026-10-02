@@ -32,7 +32,7 @@ TEMPLATE = """\
 
 # ---------------------------------------------------------------- repos
 # Change the rules for one repo, wherever it is cloned.
-# [repos."acme/postal"]
+# [repos."acme/website"]
 # writes    = "acme/vault-public"
 # reads     = ["kabir/vault-recipes"]      # added to the owner's vaults
 # auto_pull = true                         # `git pull --ff-only` it on every sync
