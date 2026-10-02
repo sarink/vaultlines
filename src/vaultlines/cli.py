@@ -297,7 +297,7 @@ def _new_vault_problem(cfg: Config, text: str) -> str | None:
     """Why `text` can't be the ID of a new vault, or None."""
     vault_id = text.strip().lower()
     if not vlt.valid_id(vault_id):
-        return "Give OWNER/vault-NAME, like mixim-ai/vault-design."
+        return "Give OWNER/vault-NAME, like acme/vault-design."
     owner, repo = vault_id.split("/", 1)
     if not repo.startswith(vlt.PREFIX):
         return f"Vault repos start with {vlt.PREFIX}, like {owner}/{vlt.PREFIX}{repo}."
@@ -317,8 +317,8 @@ def cmd_vault_create(args) -> None:
     cfg = config.load()
     if args.vault is None:
         if not util.interactive():
-            raise VlError("Give the vault to create: OWNER/vault-NAME, like mixim-ai/vault-hq.")
-        args.vault = util.ask("vault to create (OWNER/vault-NAME, like mixim-ai/vault-hq)",
+            raise VlError("Give the vault to create: OWNER/vault-NAME, like acme/vault-hq.")
+        args.vault = util.ask("vault to create (OWNER/vault-NAME, like acme/vault-hq)",
                               check=lambda text: _new_vault_problem(cfg, text))
     problem = _new_vault_problem(cfg, args.vault)
     if problem:
@@ -437,7 +437,7 @@ def cmd_source_refresh(args) -> None:
     if args.here:
         return _refresh_here(args)
     if not args.vault:
-        raise VlError("Give the vault to refresh, like `vl source refresh mixim-ai/vault-hq`.")
+        raise VlError("Give the vault to refresh, like `vl source refresh acme/vault-hq`.")
     v, _, _ = _source_vault(args.vault)
     github.run_workflow(v.id, WORKFLOW_FILE, {"force": "true"} if args.force else {})
     what = "Rebuilding every note of" if args.force else "Refreshing"

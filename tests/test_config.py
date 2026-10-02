@@ -49,7 +49,7 @@ def test_the_template_is_only_comments_and_loads_as_the_defaults(home):
     config.write_template()
     text = config.config_path().read_text()
     assert all(line.startswith("#") or not line.strip() for line in text.splitlines())
-    assert '# [repos."mixim-ai/postal"]' in text
+    assert '# [repos."acme/postal"]' in text
     cfg = config.load_file()
     assert (cfg.repos, cfg.folders) == ({}, {})
     config.write_template()  # never replaces your file
@@ -71,7 +71,7 @@ def test_uncommenting_the_template_examples_gives_a_good_config(home):
             lines.append(line)
     path.write_text("\n".join(lines) + "\n")
     cfg = config.load_file()
-    assert cfg.repos["mixim-ai/postal"].writes == "mixim-ai/vault-public"
+    assert cfg.repos["acme/postal"].writes == "acme/vault-public"
     assert cfg.folders[str(home / "Documents" / "writing")].writes == "kabir/vault-recipes"
 
 

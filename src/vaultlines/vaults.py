@@ -1,12 +1,12 @@
 """Vaults: git repos of notes, each described by its own vault.toml.
 
-A vault is always written OWNER/REPO, in lowercase: `mixim-ai/vault-public`,
+A vault is always written OWNER/REPO, in lowercase: `acme/vault-public`,
 `kabir/vault-kabir-personal`. Its clone is vaults/OWNER/REPO in
 ~/.vaultlines. On GitHub, a vault is a repo whose name starts with `vault-` and that
 has vault.toml at its root:
 
-    about      = "Notes everyone at Mixim can see."
-    notes_from = ["mixim-ai/marketing", "mixim-ai/studio"]   # repos whose notes go here
+    about      = "Notes everyone at Acme can see."
+    notes_from = ["acme/marketing", "acme/studio"]   # repos whose notes go here
 
     [source]                                                  # where the notes come from; read-only
     kind = "gdrive"
@@ -45,7 +45,7 @@ def personal_id(owner: str, me: str) -> str:
 
 
 def short_name(vault_id: str) -> str:
-    """mixim-ai/vault-public -> mixim-ai-public. kabir/vault-kabir-personal -> kabir-personal."""
+    """acme/vault-public -> acme-public. kabir/vault-kabir-personal -> kabir-personal."""
     owner, repo = vault_id.split("/", 1)
     rest = repo.removeprefix(PREFIX)
     if rest == owner or rest.startswith(owner + "-"):

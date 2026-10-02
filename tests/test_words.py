@@ -42,3 +42,9 @@ def test_one_word_for_each_thing(path):
     text = path.read_text().lower()
     for old, word in [("sign in", "log in"), ("signed in", "logged in"), ("sign-in", "login"), ("fill job", "refresh job")]:
         assert old not in text, f"say {word!r}"
+
+
+@pytest.mark.parametrize("path", sorted(ROOT.glob("src/vaultlines/**/*.py")), ids=lambda p: str(p.relative_to(ROOT)))
+def test_no_real_company_in_vl_itself(path):
+    """Help, messages and examples use acme, never a real company."""
+    assert "mixim" not in path.read_text().lower()

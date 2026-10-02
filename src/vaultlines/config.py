@@ -32,8 +32,8 @@ TEMPLATE = """\
 
 # ---------------------------------------------------------------- repos
 # Change the rules for one repo, wherever it is cloned.
-# [repos."mixim-ai/postal"]
-# writes    = "mixim-ai/vault-public"
+# [repos."acme/postal"]
+# writes    = "acme/vault-public"
 # reads     = ["kabir/vault-recipes"]      # added to the owner's vaults
 # auto_pull = true                         # `git pull --ff-only` it on every sync
 #
@@ -41,8 +41,8 @@ TEMPLATE = """\
 # [repos."sarink/vaultlines"]
 # allow_vl_commands = true
 #
-# Let Claude read another owner's vault in every mixim-ai repo (owners are kept apart by default):
-# [repos."mixim-ai/*"]
+# Let Claude read another owner's vault in every acme repo (owners are kept apart by default):
+# [repos."acme/*"]
 # reads = ["kabir/vault-side"]
 
 # ---------------------------------------------------------------- folders
@@ -132,7 +132,7 @@ def _int(value, key: str) -> int:
 
 def _vault_ref(value, key: str) -> str:
     if not isinstance(value, str) or not vlt.REPO_ID_RE.match(value.strip()):
-        raise _err(key, f"should be one vault, written OWNER/REPO like \"mixim-ai/vault-public\", not {value!r}")
+        raise _err(key, f"should be one vault, written OWNER/REPO like \"acme/vault-public\", not {value!r}")
     return value.strip().lower()
 
 

@@ -4,7 +4,7 @@ A vault's vault.toml says where its notes come from:
 
     [source]
     kind                 = "gdrive"
-    shared_drive         = "Mixim HQ"     # the shared drive's name (or ID)
+    shared_drive         = "Acme HQ"      # the shared drive's name (or ID)
     folder               = ""             # the whole drive, or a folder in it
     max_size             = "50M"          # bigger files get a note without text
     google_client_id     = "1234-abc.apps.googleusercontent.com"

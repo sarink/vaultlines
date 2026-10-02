@@ -8,8 +8,8 @@ Tests set VAULTLINES_FAKE_GITHUB to a JSON file in place of GitHub, and
 VAULTLINES_FAKE_LOGIN to who they are:
 
     {"root": "/tmp/remotes",                        # bare repos: root/OWNER/REPO.git
-     "orgs": {"mixim-ai": ["alice", "bob"]},
-     "repos": {"mixim-ai/vault-public": {"push": ["alice"], "read": ["bob"]},
+     "orgs": {"acme": ["alice", "bob"]},
+     "repos": {"acme/vault-public": {"push": ["alice"], "read": ["bob"]},
                "carol/vault-open": "public"}}
 """
 
