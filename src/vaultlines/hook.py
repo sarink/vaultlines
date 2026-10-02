@@ -305,8 +305,6 @@ def _session_start(event: dict, runtime: dict, state: dict | None, project_dir: 
             state["why"] = "it was forked" if source == "fork" else f"vl has no record of it before this {source}"
     else:
         state = dict(state)  # a resumed session keeps its rules
-        if not state.get("rules"):
-            state["rules"] = rules  # a record from vl 0.3
     # Plugins (like Basic Memory's briefing) put notes from these vaults into the session.
     label = lbl.from_json(state["label"])
     read = list(state.get("read", []))
@@ -315,7 +313,7 @@ def _session_start(event: dict, runtime: dict, state: dict | None, project_dir: 
         if vault not in read:
             read.append(vault)
     state.update(label=lbl.to_json(label), read=read)
-    text = briefing_text(state["rules"], runtime)
+    text = briefing_text(state.get("rules") or rules, runtime)
     return (_output("SessionStart", additionalContext=text) if text else None), state
 
 
@@ -337,7 +335,7 @@ def _leak_reason(state: dict, runtime: dict, target: str, people: list[str], ext
 # ---------------------------------------------------------------- vl's own files
 
 VL_COMMAND_RE = re.compile(
-    r"(?:^|[\s;&|(`])(?:\S*/)?vl\s+(init|apply|uninstall|org|vault|migrate|gdrive\s+add)\b")
+    r"(?:^|[\s;&|(`])(?:\S*/)?vl\s+(init|apply|uninstall|org|vault|gdrive\s+add)\b")
 VL_ENV_RE = re.compile(r"\bVAULTLINES_[A-Z_]+")
 GOOGLE = "Google sign-ins are for vl only. To get an original from Drive, run `vl gdrive fetch OWNER/REPO PATH`."
 

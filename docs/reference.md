@@ -58,7 +58,6 @@ vl gdrive rebuild OWNER/vault-NAME
 vl gdrive run [--rebuild]                             # only for the GitHub Action
 vl sync [VAULT]
 vl status | check | doctor | apply | sessions [--limit N] | uninstall
-vl migrate [--map OLD=OWNER/REPO]... [--dry-run]
 ```
 
 ## Discovery
@@ -79,7 +78,7 @@ For every call:
 4. Writes to a `reads` vault always ask.
 5. A Drive vault (and its fetch folder) is read-only. Bash that mentions it counts as a read.
 6. `vl gdrive fetch OWNER/REPO` in Bash is a read of that vault.
-7. vl's own files: writes to `~/.vaultlines/state` are blocked; any access to `~/.vaultlines/google` is blocked; edits to `config.toml`, to vl's hooks, and the commands `vl init`, `apply`, `uninstall`, `org`, `vault`, `gdrive add`, `migrate`, or `VAULTLINES_*` variables ask, unless your latest message mentions vl.
+7. vl's own files: writes to `~/.vaultlines/state` are blocked; any access to `~/.vaultlines/google` is blocked; edits to `config.toml`, to vl's hooks, and the commands `vl init`, `apply`, `uninstall`, `org`, `vault`, `gdrive add`, or `VAULTLINES_*` variables ask, unless your latest message mentions vl.
 
 The first session in a new clone counts the vault Basic Memory may have briefed it from before `vl` wrote the repo's block (your personal vault), so its first shared write may ask.
 

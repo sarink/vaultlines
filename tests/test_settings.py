@@ -5,18 +5,17 @@ from vaultlines.claude import install_hooks, is_our_hook, remove_hooks, update_s
 from vaultlines.hook import MATCHER
 
 
-def test_update_settings_sets_the_block_and_removes_v2_rules(tmp_path):
+def test_update_settings_sets_the_block_and_keeps_the_rest(tmp_path):
     path = tmp_path / "settings.local.json"
     path.write_text(json.dumps({
         "outputStyle": "Concise",
-        "permissions": {"allow": ["Bash(ls:*)"], "deny": ["mcp__vl-old", "Bash(rm:*)"],
-                        "ask": ["mcp__vl-x__write_note"]},
+        "permissions": {"allow": ["Bash(ls:*)"]},
         "basicMemory": {"primaryProject": "old", "secondaryProjects": ["y"]},
     }))
     update_settings(path, {"primaryProject": "acme", "captureFolder": "sessions", "captureEvents": False})
     data = json.loads(path.read_text())
     assert data["outputStyle"] == "Concise"
-    assert data["permissions"] == {"allow": ["Bash(ls:*)"], "deny": ["Bash(rm:*)"]}
+    assert data["permissions"] == {"allow": ["Bash(ls:*)"]}
     assert data["basicMemory"] == {"primaryProject": "acme", "captureFolder": "sessions", "captureEvents": False}
 
 

@@ -712,7 +712,7 @@ def cmd_add(args) -> None:
         raise VlError(f"--folder: {args.folder!r} should be a folder in the drive, like Finance/2024.")
     if "workflow" not in github.scopes():
         raise VlError("Your GitHub sign-in can't add workflow files, and the vault needs one. "
-                      "Run `gh auth refresh -s workflow`, then try again.")
+                      "Run `gh auth refresh -h github.com -s workflow`, then try again.")
     say("Sign in as the bot account: the Google account that only reads the shared drive.")
     refresh = google.login(args.client_id, args.client_secret)
     access = google.access_token(args.client_id, args.client_secret, refresh)

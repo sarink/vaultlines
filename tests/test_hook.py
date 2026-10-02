@@ -358,12 +358,6 @@ def test_resume_elsewhere_keeps_the_original_rules(world):
     assert "`acme-everyone`" in resumed.context
 
 
-def test_resuming_a_session_from_vl_0_3_gets_rules(world):
-    old = {"folder": "/x", "label": None, "read": [], "source": "startup", "started": 0, "updated": 0}
-    resumed = Session(world, world.site, source="resume", state=old)
-    assert resumed.rules["writes"] == "acme-everyone"
-
-
 def test_resume_or_compact_without_a_record_starts_as_only_you(world):
     for source in ("resume", "compact"):
         s = Session(world, world.site, source=source)
@@ -597,7 +591,6 @@ def test_vl_commands_and_config_ask_unless_you_asked(world):
                        ("Bash", {"command": "cd /tmp && ~/.local/bin/vl uninstall"}),
                        ("Bash", {"command": "vl vault create acme/vault-x"}),
                        ("Bash", {"command": "vl gdrive add acme/vault-hq --shared-drive HQ"}),
-                       ("Bash", {"command": "vl migrate"}),
                        ("Bash", {"command": "cat ~/.vaultlines/config.toml"}),
                        ("Bash", {"command": "VAULTLINES_HOME=/tmp/x vl status"}),
                        ("Bash", {"command": "echo '{\"disableAllHooks\": true}' > .claude/settings.json"}),

@@ -281,5 +281,5 @@ def test_add_checks_github_can_take_a_workflow_first(fake_github, computer, goog
     monkeypatch.setattr(github, "scopes", lambda: {"repo", "admin:org"})
     assert vl("gdrive", "add", "mixim-ai/vault-hq", "--shared-drive", "Mixim HQ", "--client-id", CLIENT,
               "--client-secret", "s") == 1
-    assert "gh auth refresh -s workflow" in capsys.readouterr().err
+    assert "gh auth refresh -h github.com -s workflow" in capsys.readouterr().err
     assert not any(r.startswith("/auth") for r in google_fake.requests)  # stopped before the Google sign-in

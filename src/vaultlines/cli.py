@@ -770,12 +770,6 @@ def cmd_doctor(args) -> None:
         sys.exit(1)
 
 
-def cmd_migrate(args) -> None:
-    from .migrate import migrate
-
-    migrate(args)
-
-
 def cmd_hook(args) -> None:
     from .hook import main as hook_main
 
@@ -830,11 +824,6 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="show vaults by owner, your changes, hooks and sync").set_defaults(func=cmd_status)
     sub.add_parser("doctor", help="check that everything is set up").set_defaults(func=cmd_doctor)
     sub.add_parser("uninstall", help="remove the hooks and stop background sync").set_defaults(func=cmd_uninstall)
-    s = sub.add_parser("migrate", help="move a vl 0.3 setup into ~/.vaultlines (once)")
-    s.add_argument("--map", action="append", metavar="OLD=OWNER/REPO",
-                   help="where an old vault on this computer only goes, like mixim-private=mixim-ai/vault-private")
-    s.add_argument("--dry-run", action="store_true", help="show what would happen, and change nothing")
-    s.set_defaults(func=cmd_migrate)
     sub.add_parser("hook", help=argparse.SUPPRESS).set_defaults(func=cmd_hook)
     plugins.add_commands(sub)
     return p

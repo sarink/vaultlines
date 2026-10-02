@@ -5,7 +5,6 @@ vaultlines owns only these things, so it can rewrite them safely:
   - the "basicMemory" block (read by the Basic Memory plugin), at user level and in the
     repos (and [folders] entries) Claude runs in
   - the one user-level MCP server named "basic-memory", when the Basic Memory plugin is on
-It also removes what vaultlines 0.2 left behind: "vl-*" servers and "mcp__vl-*" rules.
 """
 
 from __future__ import annotations
@@ -18,7 +17,6 @@ from pathlib import Path
 
 from .util import home, read_json, run, write_json
 
-V2_PREFIX = "vl-"
 HOOK_EVENTS = ("SessionStart", "UserPromptSubmit", "PreToolUse")
 HOOK_TIMEOUT = 10
 
@@ -53,16 +51,6 @@ def user_servers() -> dict[str, dict]:
     return dict(_state().get("mcpServers", {}))
 
 
-def v2_folder_servers() -> dict[str, list[str]]:
-    """Folder -> the vl-* servers vaultlines 0.2 added there."""
-    out = {}
-    for folder, project in _state().get("projects", {}).items():
-        names = [k for k in (project.get("mcpServers") or {}) if k.startswith(V2_PREFIX)]
-        if names:
-            out[folder] = names
-    return out
-
-
 def same_server(entry: dict, argv: list[str]) -> bool:
     return [entry.get("command"), *entry.get("args", [])] == argv
 
@@ -78,29 +66,10 @@ def remove_server(name: str, scope: str, cwd: str | None = None) -> None:
 
 # ---------------------------------------------------------------- settings files
 
-def _is_v2_rule(rule: str) -> bool:
-    return rule.startswith(f"mcp__{V2_PREFIX}")
-
-
 def update_settings(path: Path, block: dict | None) -> bool:
-    """Set (or with None, remove) the basicMemory block, and drop vaultlines 0.2's rules.
-
-    Returns True if the file changed.
-    """
+    """Set (or with None, remove) the basicMemory block. Returns True if the file changed."""
     before = read_json(path, {})
     data = dict(before)
-    perms = dict(data.get("permissions", {}))
-    for key in ("allow", "ask", "deny"):
-        if key in perms:
-            rules = [r for r in perms[key] if not _is_v2_rule(r)]
-            if rules:
-                perms[key] = rules
-            else:
-                perms.pop(key)
-    if perms:
-        data["permissions"] = perms
-    else:
-        data.pop("permissions", None)
     if block:
         data["basicMemory"] = block
     else:

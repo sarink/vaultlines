@@ -181,18 +181,3 @@ Limits, honestly:
 | `vl uninstall` | Remove the hooks and stop the sync. Notes stay. |
 
 More details: [docs/reference.md](docs/reference.md).
-
-## Moving from vl 0.3
-
-```bash
-vl migrate --dry-run                                      # see what would happen
-vl migrate --map mixim-private=mixim-ai/vault-private     # then do it
-```
-
-`vl migrate` moves your vaults into `~/.vaultlines/vaults/`.
-
-- A vault on GitHub moves only if its repo follows the new rules: a `vault-` name and a `vault.toml`. Otherwise it stays, and `vl migrate` tells you the admin step it needs.
-- Your `personal` vault becomes your personal vault. Other vaults on your computer only become `local/NAME`, unless `--map` says otherwise.
-- Folder entries for repos become `[repos]` entries in `config.toml`, so nothing changes. `vl migrate` lists the ones that `notes_from` can replace.
-
-The old folders stay, with a `MOVED.txt`.
