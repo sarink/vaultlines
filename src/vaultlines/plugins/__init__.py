@@ -4,9 +4,9 @@ There are two kinds, each a module where every function is optional unless noted
 
   KINDS     plugins that answer for tool calls, like Basic Memory. config.toml turns them
             on and off (basic_memory = false).
-  SOURCES   source kinds: where a vault is filled from, named by `kind` in the vault's
+  SOURCES   source kinds: where a vault's notes come from, named by `kind` in the vault's
             [source] table, like gdrive. A vault with a source is read-only in sessions,
-            and filled by its fill job on GitHub.
+            and refreshed by its refresh job on GitHub.
 
 The hook side is pure, fast and uses only the standard library, because `vl hook`
 imports it. `data` is what the plugin put in runtime.json; `rules` is the session's
@@ -48,11 +48,11 @@ A source kind. `source` is the vault's [source] table, already checked:
   validate_source(source)                 -> ["key: problem", ...] (required)
   create(vault_id, source, ask)           -> (source, secret): on an admin's computer, before
                                              the vault's repo exists. `secret` is what the
-                                             fill job logs in with. ask(question, choices=None)
+                                             refresh job logs in with. ask(question, choices=None)
                                              asks the person for LATER keys (required)
-  SETUP_STEPS                             the fill job's steps before the refresh (YAML)
+  SETUP_STEPS                             the refresh job's steps before the refresh (YAML)
   refresh(root, source, vault_id, secret, force)
-                                          -> a status. The fill job: make the notes in `root`
+                                          -> a status. The refresh job: make the notes in `root`
                                              match the source (required)
   default_about(source), comments(source) for the vault.toml vl writes
   fetch(vault, source, short, path)       -> the local copy of one original

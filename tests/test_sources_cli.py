@@ -47,7 +47,7 @@ def google_fake(monkeypatch):
 
 @pytest.fixture
 def hq(fake_github, computer, google_fake):
-    """mixim-ai with a vault filled from Google Drive, already filled by its fill job."""
+    """mixim-ai with a vault from Google Drive, already refreshed by its refresh job."""
     gh = fake_github
     gh.org("mixim-ai", ["alice", "bob"])
     gh.vault("mixim-ai/vault-public", ["alice", "bob"])
@@ -292,7 +292,7 @@ def test_login(hq):
     assert google.load_token(CLIENT) == REFRESH
 
 
-def test_refresh_starts_the_fill_job_and_force_rebuilds(hq):
+def test_refresh_starts_the_refresh_job_and_force_rebuilds(hq):
     vl("org", "join", "mixim-ai")
     assert vl("source", "refresh", "mixim-ai/vault-hq") == 0
     assert vl("source", "refresh", "mixim-ai-hq", "--force") == 0
@@ -310,11 +310,11 @@ def test_sync_only_pulls_a_vault_with_a_source(hq, capsys):
     capsys.readouterr()
     assert vl("sync") == 0
     out = capsys.readouterr().out
-    assert "mixim-ai/vault-hq: synced. This vault is filled on GitHub, so local changes were moved" in out
+    assert "mixim-ai/vault-hq: synced. This vault is refreshed on GitHub, so local changes were moved" in out
     assert (path / "Team" / "New.md").exists()
     assert (path / "Finance" / "Runway.xlsx.md").read_text() != "edited here\n"
     assert vl("status") == 0
-    assert "filled from Google Drive, updated" in capsys.readouterr().out
+    assert "from Google Drive, refreshed" in capsys.readouterr().out
 
 
 def test_old_fetched_files_are_cleaned(tmp_path, monkeypatch):
@@ -329,14 +329,14 @@ def test_old_fetched_files_are_cleaned(tmp_path, monkeypatch):
     assert not old.exists() and not old.parent.exists() and new.exists()
 
 
-# ---------------------------------------------------------------- the fill job: `vl source refresh --here`
+# ---------------------------------------------------------------- the refresh job: `vl source refresh --here`
 
 needs_tools = pytest.mark.skipif(not (shutil.which("rclone") and shutil.which("uv")),
                                  reason="rclone or uv isn't installed")
 
 
 def _checkout(fake_github, tmp_path, toml):
-    """The fill job's checkout of the vault."""
+    """The refresh job's checkout of the vault."""
     fake_github.repo("mixim-ai/vault-hq", ["alice"], {"vault.toml": toml})
     work = tmp_path / "checkout"
     subprocess.run(["git", "clone", "-q", fake_github.url("mixim-ai/vault-hq"), str(work)], check=True)
@@ -393,3 +393,13 @@ def test_refresh_here_finds_the_shared_drive_by_name(fake_github, computer, goog
     monkeypatch.setattr(gdrive, "run", fake_run)
     assert vl("source", "refresh", "--here") == 0
     assert "team_drive = 0AHF8p0HI9kM1Uk9PVA\n" in seen["conf"]
+
+
+def test_no_fill_words_left(capsys):
+    """One word for it: a vault with a source is refreshed, by its refresh job."""
+    assert vl("vault", "create", "--source", "gdrive", "--help") == 0
+    assert vl("source", "refresh", "--help") == 0
+    assert vl("source", "--help") == 0
+    out = capsys.readouterr().out.lower()
+    assert "fill" not in out
+    assert "fill" not in cli.source_workflow(gdrive).lower()

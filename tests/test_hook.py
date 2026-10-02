@@ -229,7 +229,7 @@ def test_login_case_doesnt_matter(world):
     assert decision(s.call("Write", file_path=world.vault("acme-founders", "b.md"))) is None
 
 
-# ---------------------------------------------------------------- vaults filled from Drive
+# ---------------------------------------------------------------- vaults with a source
 
 def test_a_drive_vault_is_read_only(world):
     s = Session(world, world.site)
@@ -237,7 +237,7 @@ def test_a_drive_vault_is_read_only(world):
     for tool in ("Write", "Edit"):
         out = s.call(tool, file_path=world.vault("acme-drive", "x.md"), content="x")
         assert decision(out) == "deny"
-        assert "`acme-drive` is filled from Google Drive" in reason(out)
+        assert "`acme-drive` comes from Google Drive" in reason(out)
     out = s.bm("write_note", title="t", content="c", directory="d", project="acme-drive")
     assert decision(out) == "deny"
 

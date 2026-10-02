@@ -71,7 +71,7 @@ def test_config_entries_for_vaults_that_arent_here_are_left_out(tmp_path, monkey
     assert out["repos"]["mixim-ai/x"] == {"writes": None, "reads": ["mixim-ai-hq"]}
     assert out["repos"]["mixim-ai/y"] == {"writes": None, "reads": []}
     assert any("no vault mixim-ai/vault-gone" in w for w in warnings)
-    assert any("mixim-ai/vault-hq is filled from gdrive, so notes can't be saved there" in w for w in warnings)
+    assert any("mixim-ai/vault-hq comes from gdrive, so notes can't be saved there" in w for w in warnings)
 
 
 def test_lost_vaults_stay_known_but_arent_used(tmp_path, monkeypatch):

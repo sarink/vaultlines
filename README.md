@@ -74,7 +74,7 @@ Who can use a published vault is who can access its repo on GitHub. To give some
 
 ## Sources
 
-A vault can be filled from a **source**, like a Google Drive shared drive. It then holds one note for each file in the source: the file's text, and where the original is. Its **fill job**, a GitHub Action, refreshes it every hour. In Claude sessions, the vault is read-only.
+A vault's notes can come from a **source**, like a Google Drive shared drive. It then holds one note for each file in the source: the file's text, and where the original is. Its **refresh job**, a GitHub Action, refreshes it every hour. In Claude sessions, the vault is read-only.
 
 Make a vault with a source (for admins, once, on any computer):
 
@@ -83,11 +83,11 @@ vl vault create mixim-ai/vault-hq --source gdrive --shared_drive "Mixim HQ" \
   --google_client_id 1234-abc.apps.googleusercontent.com --google_client_secret GOCSPX-...
 ```
 
-After `--source KIND`, each flag is a key of the `[source]` table in `vault.toml`, spelled the same. `vl vault create --source KIND --help` lists them, and says how to get each one. If you leave out a key, `vl` shows those steps and asks for it. A vault with a source is always published, because its fill job runs on GitHub.
+After `--source KIND`, each flag is a key of the `[source]` table in `vault.toml`, spelled the same. `vl vault create --source KIND --help` lists them, and says how to get each one. If you leave out a key, `vl` shows those steps and asks for it. A vault with a source is always published, because its refresh job runs on GitHub.
 
 | Command | What it does |
 |---|---|
-| `vl source refresh VAULT` | Start the fill job now. `--force` rebuilds every note from scratch. |
+| `vl source refresh VAULT` | Start the refresh job now. `--force` rebuilds every note from scratch. |
 | `vl source fetch VAULT PATH` | Fetch one original. Claude runs this when a note isn't enough. |
 | `vl source login VAULT` | Log in to the source again, for fetching. |
 
@@ -108,7 +108,7 @@ Before you start, you need two things. Log in to Google with your Workspace acco
    2. Turn on the Drive API: <https://console.cloud.google.com/apis/library/drive.googleapis.com>, then "Enable".
    3. Set up the login screen: <https://console.cloud.google.com/auth/overview>, then "Get started". Audience: "Internal".
    4. Make the client: <https://console.cloud.google.com/auth/clients>, then "Create client". Application type: "Desktop app". Google then shows the client ID and the client secret.
-2. **A bot account**: a Google account that the fill job logs in as. Make a user at <https://admin.google.com> (Directory > Users), and add it to the shared drive as a "Viewer". Add it to no other shared drive.
+2. **A bot account**: a Google account that the refresh job logs in as. Make a user at <https://admin.google.com> (Directory > Users), and add it to the shared drive as a "Viewer". Add it to no other shared drive.
 
 `vl vault create` asks you to log in as the bot account. It checks that the login can only read Drive. If you left out `--shared_drive`, it lists the bot's shared drives and asks which one. Everyone who can read the vault reads the text of every file in the shared drive.
 

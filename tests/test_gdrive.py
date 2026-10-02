@@ -381,7 +381,7 @@ def test_commit_only_when_something_changed(tmp_path):
     assert gitsync.git(tmp_path, "rev-list", "--count", "HEAD").stdout.strip() == "1"
 
 
-# ---------------------------------------------------------------- syncing a filled vault: pull only
+# ---------------------------------------------------------------- syncing a vault with a source: pull only
 
 def _clone_pair(tmp_path):
     from conftest import push_repo

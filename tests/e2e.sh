@@ -245,7 +245,7 @@ vl alice sync >/dev/null
 check "sync pulled the new commit" test -f "$A_WS/skill.md"
 check "  ...and the plugin block stays out of that repo's git" test -z "$(git -C "$A_WS" status --porcelain)"
 
-echo "== a vault filled from Google Drive"
+echo "== a vault from Google Drive"
 if command -v rclone >/dev/null && command -v uv >/dev/null; then
   ACTION="$ROOT/action"
   admin clone -q "$R/mixim-ai/vault-hq.git" "$ACTION"
@@ -262,7 +262,7 @@ if command -v rclone >/dev/null && command -v uv >/dev/null; then
   echo "edited" >> "$HQ/old.zip.md"
   check "bob's sync takes the vault as GitHub has it" grep -q "local changes were moved to the branch" <<<"$(vl bob sync)"
   check "  ...keeping his change on a branch" test -n "$(git -C "$HQ" branch --list 'local-changes-*')"
-  check "status shows when Drive last filled it" grep -q "filled from Google Drive, updated" <<<"$(vl bob status)"
+  check "status shows when Drive last refreshed it" grep -q "from Google Drive, refreshed" <<<"$(vl bob status)"
 else
   echo "  skip  rclone or uv isn't installed"
   vl alice sync >/dev/null && vl bob sync >/dev/null

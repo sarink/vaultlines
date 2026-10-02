@@ -139,7 +139,7 @@ def pull_only(path: Path) -> None:
 
 
 def pull_keeping_changes(path: Path) -> str:
-    """For vaults filled from elsewhere: take the remote as it is. Local changes, which
+    """For vaults with a source: take the remote as it is. Local changes, which
     shouldn't happen, are saved on a branch `local-changes-DATE` first."""
     import time
 
@@ -165,6 +165,6 @@ def pull_keeping_changes(path: Path) -> str:
     git(path, "reset", "-q", "--hard", f"origin/{b}")
     git(path, "clean", "-q", "-fd", "-e", "sessions/", "-e", ".obsidian/")
     if saved:
-        return (f"synced. This vault is filled on GitHub, so local changes were moved to the branch "
+        return (f"synced. This vault is refreshed on GitHub, so local changes were moved to the branch "
                 f"{saved}")
     return "synced"

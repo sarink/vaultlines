@@ -7,18 +7,18 @@ Details the README leaves out. For how things fit together, read the README firs
 | Key | What it is |
 |---|---|
 | `about` | One line about the vault. Claude sees it at the start of a session. |
-| `notes_from` | Repos (`OWNER/REPO`) whose sessions save notes here. Only repos of the vault's own owner count. A vault filled from a `[source]` can't have any. |
-| `[source]` | The vault is filled from elsewhere, and is read-only in sessions. `kind` says from what. |
+| `notes_from` | Repos (`OWNER/REPO`) whose sessions save notes here. Only repos of the vault's own owner count. A vault with a `[source]` can't have any. |
+| `[source]` | The vault's notes come from elsewhere, and it is read-only in sessions. `kind` says from what. |
 
 Problems in a `vault.toml` never stop `vl`: they show in `vl apply` and `vl doctor`.
 
-### `[source]`: a vault filled from a source
+### `[source]`: a vault with a source
 
 `kind` names the source kind; the other keys belong to the kind. `vl vault create VAULT --source KIND --KEY VALUE ...` writes them: each flag is a key, spelled the same. A source kind is a module in `plugins/` (see the API at the top of `plugins/__init__.py`).
 
 Every kind works the same way:
 
-- The vault's **fill job** is `.github/workflows/vl-source.yml`. It runs `vl source refresh --here` every hour, and on demand (`vl source refresh VAULT [--force]`). It logs in to the source with the Actions secret `VL_SOURCE_TOKEN`, which `vl vault create` sets. Its commits are "Update from KIND NAME", like "Update from Google Drive".
+- The vault's **refresh job** is `.github/workflows/vl-source.yml`. It runs `vl source refresh --here` every hour, and on demand (`vl source refresh VAULT [--force]`). It logs in to the source with the Actions secret `VL_SOURCE_TOKEN`, which `vl vault create` sets. Its commits are "Update from KIND NAME", like "Update from Google Drive".
 - On your computer, `vl sync` only pulls the vault. Local changes are saved on a branch `local-changes-DATE`, and the vault is reset to GitHub's.
 - In sessions, the vault (and its fetch folder) is read-only.
 
@@ -26,7 +26,7 @@ Every kind works the same way:
 
 | Key | What it is |
 |---|---|
-| `shared_drive` | The shared drive's name (or ID). The fill job looks up its ID on each refresh. |
+| `shared_drive` | The shared drive's name (or ID). The refresh job looks up its ID on each refresh. |
 | `folder` | Only this folder of the drive (default `""`: all of it). |
 | `max_size` | Bigger files get a note without text (default `"50M"`). |
 | `google_client_id`, `google_client_secret` | The Google OAuth app (desktop type). Its secret isn't secret: Google says so for desktop apps. |

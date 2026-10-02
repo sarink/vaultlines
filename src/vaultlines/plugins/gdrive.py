@@ -1,6 +1,6 @@
 """The gdrive source kind: one markdown note per Google Drive file, originals fetched on demand.
 
-A vault's vault.toml says where it's filled from:
+A vault's vault.toml says where its notes come from:
 
     [source]
     kind                 = "gdrive"
@@ -10,7 +10,7 @@ A vault's vault.toml says where it's filled from:
     google_client_id     = "1234-abc.apps.googleusercontent.com"
     google_client_secret = "GOCSPX-…"     # a desktop app's; Google doesn't treat it as secret
 
-The vault's fill job (a GitHub Action) runs `vl source refresh --here` every hour, logged
+The vault's refresh job (a GitHub Action) runs `vl source refresh --here` every hour, logged
 in as a bot account with read-only access to Drive. Each refresh lists Drive, downloads only
 new and changed files to a temporary folder, turns them into text with markitdown, and
 writes one note per file. The vault holds only notes.
@@ -59,7 +59,7 @@ Before you start, you need two things. Log in to Google with your Workspace acco
       Application type: "Desktop app". After "Create", Google shows the client ID
       (google_client_id) and the client secret (google_client_secret).
 
-2. A bot account: a Google account that the fill job logs in as.
+2. A bot account: a Google account that the refresh job logs in as.
    a. Make a user for it: https://admin.google.com, then Directory > Users > "Add new user".
    b. In Google Drive, add it to the shared drive as a "Viewer". Add it to no other shared drive.
    vl asks Google only for read access, and checks that the login can't change Drive.
@@ -68,7 +68,7 @@ Everyone who can read the vault on GitHub reads the text of every file in the sh
 (or the folder).
 """
 KEYS = {"kind", *OPTIONS}
-# The fill job's setup, before `vl source refresh --here`.
+# The refresh job's setup, before `vl source refresh --here`.
 SETUP_STEPS = "      - run: curl -fsSL https://rclone.org/install.sh | sudo bash -s __RCLONE__\n"
 # rclone exports each Google type to the first of these it supports: Docs to .md,
 # Sheets to .xlsx, Slides and Drawings to .pdf. Forms and others are left out.
@@ -78,7 +78,7 @@ MARKITDOWN = "0.1.8"
 CONVERTER = f"markitdown {MARKITDOWN}"
 MAX_TEXT = 200_000  # bytes of text in a note
 BATCH = 100  # files downloaded and converted at once
-RCLONE = "v1.75.0"  # installed by the fill job
+RCLONE = "v1.75.0"  # installed by the refresh job
 
 # Frontmatter keys vl writes, in order. Any other key is kept as it is.
 OURS = ("title", "type", "source", "id", "path", "url", "modified", "md5", "mime", "converter", "text", "fetch")
@@ -638,7 +638,7 @@ def _drive_id(access: str, source: dict) -> tuple[str, str]:
 def create(vault_id: str, source: dict, ask) -> tuple[dict, str]:
     """`vl vault create --source gdrive`, on an admin's computer: log in as the bot account,
     check it can only read and can open the shared drive. Without a shared_drive, asks which
-    one. Returns the [source] table and the fill job's secret (the bot's refresh token)."""
+    one. Returns the [source] table and the refresh job's secret (the bot's refresh token)."""
     from .. import google
     from ..util import say
 
@@ -651,14 +651,14 @@ def create(vault_id: str, source: dict, ask) -> tuple[dict, str]:
             from ..util import VlError
             raise VlError("The bot account isn't in any shared drive. Add it to one as a Viewer, then try again.")
         say("The bot account can open these shared drives:")
-        source = {**source, "shared_drive": ask("shared_drive: which one fills the vault",
+        source = {**source, "shared_drive": ask("shared_drive: the vault's notes come from which one",
                                                 [d.get("name") or d["id"] for d in drives])}
     _drive_id(access, source)
     return source, refresh_token
 
 
 def refresh(root: Path, source: dict, vault_id: str, token: str, force: bool) -> str:
-    """The fill job: make the notes in `root` match the drive. Returns a status."""
+    """The refresh job: make the notes in `root` match the drive. Returns a status."""
     import tempfile
 
     from .. import google

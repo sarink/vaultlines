@@ -8,7 +8,7 @@ has vault.toml at its root:
     about      = "Notes everyone at Mixim can see."
     notes_from = ["mixim-ai/marketing", "mixim-ai/studio"]   # repos whose notes go here
 
-    [source]                                                  # filled from elsewhere, read-only
+    [source]                                                  # where the notes come from; read-only
     kind = "gdrive"
 
 Basic Memory and Claude know each vault by a short name: the owner, then the repo
@@ -78,7 +78,7 @@ class Info:
     """What a vault says about itself."""
     about: str = ""
     notes_from: list[str] = field(default_factory=list)  # OWNER/REPO, lowercase
-    source: dict | None = None  # the [source] table: the vault is filled from elsewhere
+    source: dict | None = None  # the [source] table: where the notes come from
 
 
 def parse_vault_toml(text: str) -> tuple[Info, list[str]]:

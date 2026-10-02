@@ -323,7 +323,7 @@ def cmd_vault_create(args) -> None:
 
 WORKFLOW_FILE = "vl-source.yml"
 WORKFLOW = """\
-# Written by vl. The fill job: it fills this vault from its source (__NAME__).
+# Written by vl. The refresh job: it refreshes this vault from its source (__NAME__).
 name: vl source
 on:
   schedule: [{ cron: "17 * * * *" }]        # hourly; edit to change
@@ -349,7 +349,7 @@ def source_workflow(kind) -> str:
 
 
 def _create_with_source(args, vault_id: str, notes_from: list[str]) -> None:
-    """A vault filled from a source. It's always published: its fill job runs on GitHub."""
+    """A vault with a source. It's always published: its refresh job runs on GitHub."""
     kind = _kind(args.source)
     if notes_from:
         raise VlError("a vault with a source can't take notes, so it has no notes_from.")
@@ -365,7 +365,7 @@ def _create_with_source(args, vault_id: str, notes_from: list[str]) -> None:
     if github.exists(vault_id):
         raise VlError(f"{vault_id} already exists on GitHub.")
     if "workflow" not in github.scopes():
-        raise VlError("Your GitHub login can't add workflow files, and the vault's fill job needs one. "
+        raise VlError("Your GitHub login can't add workflow files, and the vault's refresh job needs one. "
                       "Run `gh auth refresh -h github.com -s workflow`, then try again.")
     if missing:
         say(guide)
@@ -395,7 +395,7 @@ def _create_with_source(args, vault_id: str, notes_from: list[str]) -> None:
     owner = vault_id.split("/")[0]
     _record(owner, [*_discovery().get(owner, {}).get("vaults", []), vault_id])
     _apply(config.load())
-    say(f"\nMade {vault_id}, filled from {kind.NAME} every hour by its fill job on GitHub.")
+    say(f"\nMade {vault_id}. Its refresh job on GitHub refreshes it from {kind.NAME} every hour.")
     say(f"The first refresh is starting. Watch it with `gh run watch --repo {vault_id}`.")
     say("Give people read access to the repo on GitHub; `vl sync` finds it for them.")
 
@@ -411,7 +411,7 @@ def _source_vault(ref: str):
     """(vault, its kind, its [source] table) for a vault with a source."""
     v = config.load().vault(ref)
     if v.source is None:
-        raise VlError(f"{v.id} has no source: it isn't filled from anywhere.")
+        raise VlError(f"{v.id} has no source.")
     kind = _kind(v.source.get("kind"))
     problems = kind.validate_source(v.source)
     if problems:
@@ -431,7 +431,7 @@ def cmd_source_refresh(args) -> None:
 
 
 def _refresh_here(args) -> None:
-    """The fill job: refresh the vault in this clone, commit and push."""
+    """The refresh job: refresh the vault in this clone, commit and push."""
     root = Path(args.path or ".").resolve()
     info, _ = vlt.parse_vault_toml((root / vlt.VAULT_FILE).read_text() if (root / vlt.VAULT_FILE).exists() else "")
     if info.source is None:
@@ -637,7 +637,7 @@ def clean_fetched(max_age: float = 86400) -> int:
 
 def _sync_vault(v: vlt.Vault, stamp) -> str:
     if v.source is not None:
-        return gitsync.pull_keeping_changes(v.path)  # its fill job writes it; this computer only reads
+        return gitsync.pull_keeping_changes(v.path)  # its refresh job writes it; this computer only reads
     return gitsync.sync(v.path)
 
 
@@ -757,7 +757,7 @@ def _vault_state(v: vlt.Vault, gone: set[str]) -> str:
     if v.source is not None:
         name = kind.NAME if kind else v.source.get("kind")
         when = gitsync.git(v.path, "log", "-1", "--format=%cr", f"--grep=Update from {name}", check=False).stdout.strip()
-        return f"filled from {name}, updated {when or 'never'}"
+        return f"from {name}, refreshed {when or 'never'}"
     pending = gitsync.pending_changes(v.path)
     where = "published" if v.remote else "this computer only"
     return f"{where}, last commit {gitsync.last_commit_age(v.path)}" + (f", {pending} unsaved" if pending else "")
@@ -869,10 +869,10 @@ def cmd_doctor(args) -> None:
     for _, plugin, settings in plugins.configured(cfg):
         if hasattr(plugin, "doctor"):
             plugin.doctor(cfg, settings, check)
-    filled = [(vid, v) for vid, v in sorted(cfg.vaults.items()) if v.source is not None]
-    if filled:
+    sourced = [(vid, v) for vid, v in sorted(cfg.vaults.items()) if v.source is not None]
+    if sourced:
         say("Sources")
-    for vid, v in filled:
+    for vid, v in sourced:
         kind = plugins.SOURCES.get(v.source.get("kind"))
         if kind is None:
             check(False, f"{vid}: source kind {v.source.get('kind')!r}", f"vl knows: {', '.join(plugins.SOURCES)}")
@@ -956,8 +956,8 @@ def build_parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
     s.add_argument("--notes_from", metavar="REPO", action="append", help="a repo whose notes go here (OWNER/REPO); "
                    "give it again for more")
     s.add_argument("--publish", action="store_true", help="also publish it (a private repo on GitHub)")
-    s.add_argument("--source", metavar="KIND", help=f"fill the vault from a source ({kinds}). The vault is "
-                   "published, and its fill job runs on GitHub")
+    s.add_argument("--source", metavar="KIND", help=f"the vault's notes come from a source ({kinds}). The vault "
+                   "is published, and its refresh job runs on GitHub")
     if kind is not None:
         group = s.add_argument_group(f"{_wanted_kind(argv)} source: each key goes into [source] in vault.toml")
         for key, text in kind.OPTIONS.items():
@@ -967,12 +967,12 @@ def build_parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
     s.add_argument("vault", metavar="VAULT")
     s.set_defaults(func=cmd_vault_publish)
 
-    source = sub.add_parser("source", help="vaults filled from a source")
+    source = sub.add_parser("source", help="vaults with a source")
     ssub = source.add_subparsers(dest="source_command", required=True, metavar="ACTION")
-    s = ssub.add_parser("refresh", help="start the vault's fill job on GitHub now")
+    s = ssub.add_parser("refresh", help="start the vault's refresh job on GitHub now")
     s.add_argument("vault", metavar="VAULT", nargs="?")
     s.add_argument("--force", action="store_true", help="rebuild every note from scratch")
-    s.add_argument("--here", action="store_true", help=argparse.SUPPRESS)  # the fill job itself
+    s.add_argument("--here", action="store_true", help=argparse.SUPPRESS)  # the refresh job itself
     s.add_argument("--path", help=argparse.SUPPRESS)
     s.set_defaults(func=cmd_source_refresh)
     s = ssub.add_parser("fetch", help="fetch one original into the fetch folder and print where it is")

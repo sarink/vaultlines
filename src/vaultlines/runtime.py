@@ -39,7 +39,7 @@ def owners(cfg: Config, lost: set[str], warnings: list[str]) -> dict[str, dict]:
         for vid in mine:
             v = cfg.vaults[vid]
             if v.source is not None and v.notes_from:
-                warnings.append(f"{vid}: notes_from is ignored, because the vault is filled from {v.source.get('kind')} "
+                warnings.append(f"{vid}: notes_from is ignored, because the vault comes from {v.source.get('kind')} "
                                 "and can't take notes")
                 continue
             for repo in v.notes_from:
@@ -74,7 +74,7 @@ def _rule(cfg: Config, rule, where: str, lost: set[str], warnings: list[str]) ->
 
     writes = ref(rule.writes, "writes")
     if writes and cfg.vaults[rule.writes].source is not None:
-        warnings.append(f"config.toml: {where}.writes: {rule.writes} is filled from "
+        warnings.append(f"config.toml: {where}.writes: {rule.writes} comes from "
                         f"{cfg.vaults[rule.writes].source.get('kind')}, so notes can't be saved there. Put it in reads.")
         writes = None
     reads = [s for s in (ref(r, "reads") for r in rule.reads) if s]

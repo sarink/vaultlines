@@ -13,9 +13,9 @@ keeps them, so a resumed session keeps them too. Then, for every call:
 3. Writes: a write to vault V asks (or blocks, with on_leak = "block") if people who
    can see V couldn't see everything the session read.
 4. Writes to a `reads` vault always ask.
-5. A vault filled from elsewhere (a [source], like Google Drive) is read-only.
+5. A vault with a source (a [source], like Google Drive) is read-only.
 6. Reads are recorded here, before the call runs.
-7. A filled vault's fetch folder (originals from `vl source fetch`) counts as the vault,
+7. The fetch folder of a vault with a source (originals from `vl source fetch`) counts as the vault,
    for reads only. `vl source fetch OWNER/REPO` is a read of that vault.
 8. vl itself: writes to its records are blocked, and so is any access to its Google
    logins; changes to config.toml, its hooks, or `vl` commands that change what it
@@ -89,8 +89,8 @@ def _by_ref(runtime: dict, ref: str) -> str | None:
     return next((name for name, v in runtime["vaults"].items() if v.get("id") == ref), None)
 
 
-def _filled(runtime: dict, vault: str) -> bool:
-    """A vault filled from elsewhere (a [source] in its vault.toml): read-only."""
+def _has_source(runtime: dict, vault: str) -> bool:
+    """A vault with a source (a [source] in its vault.toml): read-only."""
     return bool(runtime["vaults"].get(vault, {}).get("source"))
 
 
@@ -207,7 +207,7 @@ def touched(event: dict, runtime: dict, rules: dict | None) -> Call:
         if isinstance(command, str):
             for v in bash_vaults(command, cwd, runtime):
                 call.add(v, "read")
-                if not _filled(runtime, v):  # a filled vault is only read; sync undoes any change
+                if not _has_source(runtime, v):  # a vault with a source is only read; sync undoes any change
                     call.add(v, "write")
                     call.bash = True
             # Originals from `vl source fetch`, and `vl source fetch` itself, only read.
@@ -493,12 +493,12 @@ def _vault_rules(event: dict, runtime: dict, state: dict | None, project_dir: st
                 reason += f" {call.search_root} holds other vaults too: search a narrower folder."
         return _pre("deny", reason), None
 
-    # 5. Vaults filled from elsewhere are read-only
+    # 5. Vaults with a source are read-only
     for v in call.writes:
-        if _filled(runtime, v):
+        if _has_source(runtime, v):
             source = plugins.SOURCES.get(runtime["vaults"][v].get("source"))
             what = getattr(source, "NAME", None) or runtime["vaults"][v].get("source")
-            return _pre("deny", f"`{v}` is filled from {what}, so it's read-only. Save notes in "
+            return _pre("deny", f"`{v}` comes from {what}, so it's read-only. Save notes in "
                                 f"`{rules.get('writes')}`."), None
 
     # 2. Label: this call's reads count before its writes (e.g. `cp vaultA/x vaultB/`)
