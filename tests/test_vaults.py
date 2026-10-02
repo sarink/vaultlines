@@ -14,7 +14,7 @@ from vaultlines.vaults import parse_vault_toml, short_name, short_names
     ("mixim-ai/vault-kabir-personal", "mixim-ai-kabir-personal"),
     ("mixim-ai/vault-mixim-ai-hq", "mixim-ai-hq"),
     ("acme/vault-acme", "acme"),
-    ("local/recipes", "local-recipes"),
+    ("acme/recipes", "acme-recipes"),
     ("acme/vault-acmecorp", "acme-acmecorp"),  # only a whole word counts as the owner
 ])
 def test_short_name(vault_id, short):
@@ -31,7 +31,7 @@ def test_short_names_never_collide():
 
 @pytest.mark.parametrize("vault_id, ok", [
     ("mixim-ai/vault-public", True),
-    ("local/recipes", True),
+    ("acme/recipes", True),
     ("Mixim-AI/vault-public", False),  # vl writes IDs in lowercase
     ("mixim-ai", False),
     ("mixim-ai/vault-public/x", False),

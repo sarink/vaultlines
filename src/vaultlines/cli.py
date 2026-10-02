@@ -197,7 +197,7 @@ def cmd_init(args) -> None:
         say("Log in to GitHub. vl uses your account to find the vaults you can access.")
         subprocess.run(["gh", "auth", "login"])
         if not github.logged_in():
-            raise VlError("Not signed in to GitHub. Run `gh auth login`, then `vl init` again.")
+            raise VlError("Not logged in to GitHub. Run `gh auth login`, then `vl init` again.")
     me = github.login()
     if not me:
         raise VlError("Couldn't get your GitHub login. Check `gh auth status`.")
@@ -713,7 +713,7 @@ def _report_hook_warnings(cfg: Config, stamp, background: bool) -> None:
     for w in new:
         say(f"{stamp()}check: {w}")
     if new and background:
-        notify(f"vl can't guard some places: {len(new)} settings file(s) set disableAllHooks. Run `vl check`.")
+        notify(f"vl can't guard some places: {len(new)} settings file(s) set disableAllHooks. Run `vl sync --check-github`.")
 
 
 # ---------------------------------------------------------------- check / status / sessions / doctor
@@ -894,7 +894,7 @@ def cmd_doctor(args) -> None:
     check(problem is None, "hook data (runtime.json) is up to date", "vl apply" if problem else "")
     if problem is None:
         unchecked = [n for n, v in data["vaults"].items() if v["audience"].get("reason") == "not checked yet"]
-        check(not unchecked, "every vault's audience is known to the hook", "vl check")
+        check(not unchecked, "every vault's audience is known to the hook", "vl sync --check-github")
     if launchd.supported():
         say("Sync")
         check(launchd.loaded(), "background sync is on", "vl init")

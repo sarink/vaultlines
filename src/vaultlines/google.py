@@ -4,7 +4,7 @@ Standard library only. vl only ever asks for the `drive.readonly` scope, and che
 Google what each token can do before using it: a token that could change Drive is
 refused. Tokens never appear in messages.
 
-Sign-ins for fetching originals are saved in ~/.vaultlines/google/, one per Google app
+Logins for fetching originals are saved in ~/.vaultlines/google/, one per Google app
 (client ID). The hook keeps Claude sessions away from that folder.
 
 Tests set VAULTLINES_FAKE_GOOGLE to a fake Google's address; only one on this computer

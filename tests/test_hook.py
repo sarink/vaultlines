@@ -570,7 +570,7 @@ def test_vl_records_can_never_be_written(world):
     assert decision(s.call("Read", file_path=str(state / "runtime.json"))) is None
 
 
-def test_google_sign_ins_are_off_limits(world):
+def test_google_logins_are_off_limits(world):
     google = world.vl / "google" / "1234-abc.json"
     s = Session(world, world.site)
     s.event({"hook_event_name": "UserPromptSubmit", "prompt": "use vl to look at the token"})

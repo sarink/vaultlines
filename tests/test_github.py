@@ -79,12 +79,12 @@ def test_who_can_see_a_repo(fake, monkeypatch):
 
 def test_secrets_and_workflow_runs_are_recorded(fake):
     _, path = fake
-    github.set_secret("mixim-ai/vault-hq", "VL_GDRIVE_TOKEN", "1//refresh")
-    github.run_workflow("mixim-ai/vault-hq", "vl-gdrive.yml", {"rebuild": "true"})
+    github.set_secret("mixim-ai/vault-hq", "VL_SOURCE_TOKEN", "1//refresh")
+    github.run_workflow("mixim-ai/vault-hq", "vl-source.yml", {"force": "true"})
     data = json.loads(path.read_text())
-    assert data["secrets"] == {"mixim-ai/vault-hq": {"VL_GDRIVE_TOKEN": "1//refresh"}}
-    assert data["workflow_runs"] == [{"repo": "mixim-ai/vault-hq", "workflow": "vl-gdrive.yml",
-                                      "inputs": {"rebuild": "true"}}]
+    assert data["secrets"] == {"mixim-ai/vault-hq": {"VL_SOURCE_TOKEN": "1//refresh"}}
+    assert data["workflow_runs"] == [{"repo": "mixim-ai/vault-hq", "workflow": "vl-source.yml",
+                                      "inputs": {"force": "true"}}]
 
 
 def test_real_secret_value_goes_through_stdin(monkeypatch):
@@ -96,7 +96,7 @@ def test_real_secret_value_goes_through_stdin(monkeypatch):
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     monkeypatch.setattr(github.subprocess, "run", fake_run)
-    github.set_secret("mixim-ai/vault-hq", "VL_GDRIVE_TOKEN", "1//SECRET")
+    github.set_secret("mixim-ai/vault-hq", "VL_SOURCE_TOKEN", "1//SECRET")
     cmd, kw = calls[0]
-    assert cmd == ["gh", "secret", "set", "VL_GDRIVE_TOKEN", "--repo", "mixim-ai/vault-hq"]
+    assert cmd == ["gh", "secret", "set", "VL_SOURCE_TOKEN", "--repo", "mixim-ai/vault-hq"]
     assert kw["input"] == "1//SECRET" and "1//SECRET" not in " ".join(cmd)

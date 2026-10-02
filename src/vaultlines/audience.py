@@ -87,7 +87,7 @@ def audiences(found: dict, fresh: bool = True) -> tuple[dict[str, Audience], lis
             continue
         cached = Audience.from_json(cache[repo]) if repo in cache else None
         if not fresh:
-            out[vault_id] = cached or unknown("not checked yet. Run `vl check`.")
+            out[vault_id] = cached or unknown("not checked yet. Run `vl sync --check-github`.")
             continue
         try:
             answer = github.audience(repo)
