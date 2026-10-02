@@ -7,7 +7,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from .util import home, run
+from .util import home, run, state_dir, vl_home
 
 LABEL = "com.vaultlines.sync"
 
@@ -17,7 +17,7 @@ def plist_path() -> Path:
 
 
 def log_path() -> Path:
-    return home() / "Library" / "Logs" / "vaultlines.log"
+    return state_dir() / "sync.log"
 
 
 def supported() -> bool:
@@ -30,7 +30,7 @@ def _vl_path() -> str:
 
 def _path_env() -> str:
     dirs = []
-    for tool in ("git", "gh", "uv", "uvx", "claude", "rclone"):
+    for tool in ("git", "gh", "uv", "uvx", "claude"):
         found = shutil.which(tool)
         if found and os.path.dirname(found) not in dirs:
             dirs.append(os.path.dirname(found))
@@ -44,6 +44,8 @@ def install(interval: int) -> None:
     plist = plist_path()
     plist.parent.mkdir(parents=True, exist_ok=True)
     log_path().parent.mkdir(parents=True, exist_ok=True)
+    found = os.environ.get("VAULTLINES_HOME")
+    custom_home = f"<key>VAULTLINES_HOME</key><string>{vl_home()}</string>" if found else ""
     plist.write_text(f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -54,7 +56,7 @@ def install(interval: int) -> None:
   <key>StartInterval</key><integer>{interval}</integer>
   <key>RunAtLoad</key><true/>
   <key>EnvironmentVariables</key>
-  <dict><key>PATH</key><string>{_path_env()}</string></dict>
+  <dict><key>PATH</key><string>{_path_env()}</string>{custom_home}</dict>
   <key>StandardOutPath</key><string>{log_path()}</string>
   <key>StandardErrorPath</key><string>{log_path()}</string>
 </dict>

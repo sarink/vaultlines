@@ -6,7 +6,6 @@ import json
 import os
 import subprocess
 import sys
-import uuid
 from pathlib import Path
 from typing import Any
 
@@ -38,35 +37,40 @@ def expand(path: str | Path) -> Path:
     return Path(os.path.expanduser(str(path))).resolve()
 
 
+def vl_home() -> Path:
+    """Everything vl owns: ~/.vaultlines, or VAULTLINES_HOME (tests)."""
+    found = os.environ.get("VAULTLINES_HOME")
+    return Path(os.path.abspath(os.path.expanduser(found))) if found else home() / ".vaultlines"
+
+
 def state_dir() -> Path:
-    """Where vl keeps files the hook reads: ~/.local/state/vaultlines."""
-    base = os.environ.get("XDG_STATE_HOME") or str(home() / ".local" / "state")
-    return Path(base) / "vaultlines"
+    """Files only vl writes: runtime.json (the hook reads it), sessions, state.json."""
+    return vl_home() / "state"
 
 
 def cache_dir() -> Path:
-    """Where vl keeps files it can always make again: ~/.cache/vaultlines."""
-    base = os.environ.get("XDG_CACHE_HOME") or str(home() / ".cache")
-    return Path(base) / "vaultlines"
+    """Files vl can always make again."""
+    return vl_home() / "cache"
 
 
-def fetch_dir(vault: str) -> Path:
-    """Where `vl fetch` puts a source vault's originals."""
-    return cache_dir() / "fetch" / vault
+def vaults_dir() -> Path:
+    """vaults/OWNER/REPO for each vault. vaults/OWNER exists = OWNER is joined."""
+    return vl_home() / "vaults"
 
 
-def machine_id() -> str:
-    """A random ID for this computer, made once."""
-    path = state_dir() / "machine-id"
-    try:
-        found = path.read_text().strip()
-    except FileNotFoundError:
-        found = ""
-    if not found:
-        found = uuid.uuid4().hex
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(found + "\n")
-    return found
+def google_dir() -> Path:
+    """Read-only Google sign-ins for fetching originals. Sessions can't touch it."""
+    return vl_home() / "google"
+
+
+def clones_path() -> Path:
+    """The repos Claude ran in, recorded by the hook: top folder -> OWNER/REPO."""
+    return state_dir() / "clones.json"
+
+
+def fetch_dir(vault_id: str) -> Path:
+    """Where `vl gdrive fetch` puts a Drive vault's originals: cache/fetch/OWNER/REPO."""
+    return cache_dir() / "fetch" / vault_id
 
 
 def inside(path: str, folder: str) -> bool:

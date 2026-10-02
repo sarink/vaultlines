@@ -113,9 +113,10 @@ def session(state_dir: Path, session_id: str):
             tmp.replace(path)
 
 
-def new_session(folder: str | None, label: Label, source: str) -> dict:
+def new_session(rules: dict | None, label: Label, source: str) -> dict:
+    """`rules`: the vaults the session uses, from rules.resolve()."""
     now = time.time()
-    return {"folder": folder, "label": to_json(label), "read": [], "source": source, "started": now, "updated": now}
+    return {"rules": rules, "label": to_json(label), "read": [], "source": source, "started": now, "updated": now}
 
 
 def all_sessions(state_dir: Path) -> list[tuple[str, dict]]:

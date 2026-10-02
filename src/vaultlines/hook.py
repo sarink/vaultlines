@@ -4,19 +4,22 @@ Claude Code runs it on SessionStart and before matching tool calls (PreToolUse).
 It reads runtime.json (written by `vl apply` and the daily check), never the
 TOML config and never GitHub, so it stays fast.
 
-The rules, for a session in folder F (the closest listed parent of where it started):
+At SessionStart it works out the session's rules (see rules.py): the vault it writes
+to and the vaults it may read, from the repo where Claude started. The session record
+keeps them, so a resumed session keeps them too. Then, for every call:
 
-1. Focus: a call touching a vault that isn't F's `writes` or `reads` is blocked.
+1. Focus: a call touching a vault that isn't the session's `writes` or `reads` is blocked.
 2. Label: every vault read narrows the session label to the people who can see it.
 3. Writes: a write to vault V asks (or blocks, with on_leak = "block") if people who
    can see V couldn't see everything the session read.
 4. Writes to a `reads` vault always ask.
-5. Reads are recorded here, before the call runs.
-6. A source's fetch folder (originals from `vl fetch`) counts as its vault, for reads
-   only: writes there are denied. `vl fetch VAULT` is a read of VAULT.
-7. vl itself: writes to its records are blocked; changes to its config, its hooks,
-   or `vl` commands that change what it allows ask, unless your latest message
-   mentions vl (UserPromptSubmit records that).
+5. A vault filled from elsewhere (a [source], like Google Drive) is read-only.
+6. Reads are recorded here, before the call runs.
+7. A filled vault's fetch folder (originals from `vl gdrive fetch`) counts as the vault,
+   for reads only. `vl gdrive fetch OWNER/REPO` is a read of that vault.
+8. vl itself: writes to its records are blocked, and so is any access to its Google
+   sign-ins; changes to config.toml, its hooks, or `vl` commands that change what it
+   allows ask, unless your latest message mentions vl (UserPromptSubmit records that).
 
 `decide()` is pure. `main()` does the I/O. Only the standard library is imported,
 plus label.py and the plugins' hook side (see plugins/__init__.py).
@@ -34,7 +37,8 @@ from . import label as lbl
 from . import plugins
 from .plugins.api import here as _here
 from .plugins.api import mentions
-from .util import closest_parent, inside, state_dir
+from .rules import resolve
+from .util import clones_path, closest_parent, google_dir, inside, state_dir, vl_home
 
 READ_TOOLS = {"Read": "file_path"}
 WRITE_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path", "NotebookEdit": "notebook_path"}
@@ -42,9 +46,10 @@ SEARCH_TOOLS = ("Grep", "Glob")
 MATCHER = "^(" + "|".join(["Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "Grep", "Glob", "Bash",
                             *(f"{p}.*" for p in plugins.TOOL_PREFIXES)]) + ")$"
 ERROR = "vl hook error: run `vl doctor`."
-RUNTIME_VERSION = 3  # runtime.json's layout
-FETCH_RE = re.compile(r"(?:^|[\s;&|(`])(?:\S*/)?vl\s+fetch\s+['\"]?([a-z0-9][a-z0-9-]*)")
-FETCHED = "fetched originals are read-only copies. Run `vl fetch` again for a fresh one."
+RUNTIME_VERSION = 4  # runtime.json's layout
+FETCH_RE = re.compile(r"(?:^|[\s;&|(`])(?:\S*/)?vl\s+gdrive\s+fetch\s+['\"]?([A-Za-z0-9][A-Za-z0-9._/-]*)")
+FETCHED = "fetched originals are read-only copies. Run `vl gdrive fetch` again for a fresh one."
+REPO_HOWS = ("repos", "notes_from", "personal", "conflict")  # rules that came from the repo
 
 
 class Blocked(Exception):
@@ -76,6 +81,19 @@ def vault_of(path: str, runtime: dict, folders: dict[str, str] | None = None) ->
     return folders[key] if key else None
 
 
+def _by_ref(runtime: dict, ref: str) -> str | None:
+    """A vault's short name, from its ID (OWNER/REPO) or short name."""
+    ref = ref.lower()
+    if ref in runtime["vaults"]:
+        return ref
+    return next((name for name, v in runtime["vaults"].items() if v.get("id") == ref), None)
+
+
+def _filled(runtime: dict, vault: str) -> bool:
+    """A vault filled from elsewhere (a [source] in its vault.toml): read-only."""
+    return bool(runtime["vaults"].get(vault, {}).get("source"))
+
+
 def fetched_of(path: str, runtime: dict) -> str | None:
     """The vault a file in a fetch folder came from."""
     return vault_of(path, runtime, _fetch_paths(runtime))
@@ -90,7 +108,7 @@ def vaults_within(root: str, runtime: dict) -> list[str]:
 
 
 def _glob_root(pattern: str) -> str | None:
-    """The fixed part of an absolute Glob pattern, e.g. ~/Vaults/x/**/*.md -> ~/Vaults/x."""
+    """The fixed part of an absolute Glob pattern, e.g. ~/notes/x/**/*.md -> ~/notes/x."""
     if not pattern.startswith(("/", "~")):
         return None
     fixed = re.split(r"[*?\[{]", pattern, maxsplit=1)[0]
@@ -154,7 +172,7 @@ class Call:
         return list(dict.fromkeys(self.reads + self.writes))
 
 
-def touched(event: dict, runtime: dict, folder: dict | None) -> Call:
+def touched(event: dict, runtime: dict, rules: dict | None) -> Call:
     """Work out which vaults a PreToolUse call touches. Raises Blocked for calls vl refuses."""
     tool = event.get("tool_name") or ""
     args = event.get("tool_input") or {}
@@ -189,14 +207,16 @@ def touched(event: dict, runtime: dict, folder: dict | None) -> Call:
         if isinstance(command, str):
             for v in bash_vaults(command, cwd, runtime):
                 call.add(v, "read")
-                call.add(v, "write")
-                call.bash = True
-            # Originals from `vl fetch`, and `vl fetch` itself, only read.
-            for v in bash_vaults(command, cwd, runtime, _fetch_paths(runtime)) + FETCH_RE.findall(command):
+                if not _filled(runtime, v):  # a filled vault is only read; sync undoes any change
+                    call.add(v, "write")
+                    call.bash = True
+            # Originals from `vl gdrive fetch`, and `vl gdrive fetch` itself, only read.
+            fetched = [_by_ref(runtime, ref.strip("'\"")) for ref in FETCH_RE.findall(command)]
+            for v in bash_vaults(command, cwd, runtime, _fetch_paths(runtime)) + [v for v in fetched if v]:
                 call.add(v, "read")
     elif found := plugins.plugin_for_tool(runtime, tool):
         plugin, data = found
-        access = plugin.on_call(tool, args, folder, data)
+        access = plugin.on_call(tool, args, rules, data)
         if access.block:
             raise Blocked(access.block)
         for vault in access.vaults:
@@ -221,28 +241,72 @@ def _pre(decision: str | None, reason: str = "", updated: dict | None = None, pr
     return _output("PreToolUse", **fields) if fields else None
 
 
-def folder_entry(runtime: dict, project_dir: str) -> tuple[str | None, dict | None]:
-    folders = runtime.get("folders", {})
-    key = closest_parent(folders, os.path.realpath(project_dir)) if project_dir else None
-    return key, (folders[key] if key else None)
-
-
 def _audience(runtime: dict, vault: str) -> dict:
     return runtime["vaults"].get(vault, {}).get("audience") or {"kind": "unknown", "reason": "not in runtime.json"}
 
 
-def _session_start(event: dict, runtime: dict, state: dict | None, project_dir: str, briefing: list[str]):
+def _shorten(text: str, n: int = 60) -> str:
+    if len(text) <= n:
+        return text
+    cut = text[: n + 1]
+    cut = cut[: cut.rfind(" ")] if " " in cut else text[:n]
+    return cut.rstrip(" ,.;:") + "…"
+
+
+def _sentence(text: str) -> str:
+    return text if text.endswith((".", "!", "?", "…")) else text + "."
+
+
+def briefing_text(rules: dict, runtime: dict) -> str | None:
+    """What Claude is told at SessionStart: where to save notes, what else it may read."""
+    w = rules.get("writes")
+    if not w:
+        return None
+    reads = rules.get("reads") or []
+    vaults = runtime["vaults"]
+    where = "this repo" if rules.get("how") in REPO_HOWS else "this folder"
+    inline, extra = [], []
+    for _, plugin, data in plugins.enabled(runtime):
+        if hasattr(plugin, "briefing"):
+            i, e = plugin.briefing(w, data)
+            inline.append(i)
+            extra.append(e)
+    about = vaults.get(w, {}).get("about") or ""
+    first = f"vaultlines: save notes from {where} to `{w}`" + (f" ({', '.join(inline)})" if inline else "")
+    lines = [first + (f": {_sentence(about)}" if about else ".")]
+    if rules.get("how") == "conflict":
+        lines.append(f"{rules.get('repo')} is in notes_from of two vaults ({', '.join(rules.get('conflict') or [])}), "
+                     f"so its notes go to your personal vault `{w}`. Ask whoever manages those vaults to keep it in one.")
+    if reads:
+        shown = []
+        for r in reads:
+            text = vaults.get(r, {}).get("about") or ""
+            shown.append(f"`{r}`" + (f" ({_shorten(text)})" if text else ""))
+        lines.append(f"You can also read: {', '.join(shown)}. Writing to those asks first.")
+    lines.append(" ".join(["Other vaults are blocked here.", *extra]))
+    for v in [w, *reads]:
+        source = plugins.SOURCES.get(vaults.get(v, {}).get("source"))
+        if source and hasattr(source, "source_briefing"):
+            lines.append(source.source_briefing(v, vaults[v].get("id", v)))
+    return " ".join(lines)
+
+
+def _session_start(event: dict, runtime: dict, state: dict | None, project_dir: str, briefing: list[str],
+                   rules: dict | None):
     source = event.get("source") or "startup"
-    key, _ = folder_entry(runtime, project_dir)
+    if rules is None:
+        rules = resolve(project_dir, runtime)
     if state is None or source in ("startup", "clear"):
         if source in ("startup", "clear"):
-            state = lbl.new_session(key, lbl.EVERYONE, source)
+            state = lbl.new_session(rules, lbl.EVERYONE, source)
         else:
             # A fork, or a resume/compact vl has no record of: the context may hold anything.
-            state = lbl.new_session(key, lbl.ONLY_YOU, source)
+            state = lbl.new_session(rules, lbl.ONLY_YOU, source)
             state["why"] = "it was forked" if source == "fork" else f"vl has no record of it before this {source}"
     else:
-        state = dict(state)
+        state = dict(state)  # a resumed session keeps its rules
+        if not state.get("rules"):
+            state["rules"] = rules  # a record from vl 0.3
     # Plugins (like Basic Memory's briefing) put notes from these vaults into the session.
     label = lbl.from_json(state["label"])
     read = list(state.get("read", []))
@@ -251,28 +315,8 @@ def _session_start(event: dict, runtime: dict, state: dict | None, project_dir: 
         if vault not in read:
             read.append(vault)
     state.update(label=lbl.to_json(label), read=read)
-
-    folder = runtime.get("folders", {}).get(state.get("folder") or "")  # a resumed session keeps its folder
-    if not folder:
-        return None, state
-    w = folder["writes"]
-    reads = folder.get("reads") or []
-    where = runtime["vaults"].get(w, {}).get("show", "")
-    inline, extra = [], []
-    for _, plugin, data in plugins.enabled(runtime):
-        if hasattr(plugin, "briefing"):
-            i, e = plugin.briefing(w, data)
-            inline.append(i)
-            extra.append(e)
-    lines = [f"vaultlines: save notes from this folder to the `{w}` vault ({', '.join([*inline, f'folder {where}'])})."]
-    if reads:
-        lines.append(f"You can also read: {', '.join(reads)}. Writing to those asks first.")
-    lines.append(" ".join(["Other vaults are blocked here.", *extra]))
-    for v in [w, *reads]:
-        source = plugins.KINDS.get(runtime["vaults"].get(v, {}).get("source"))
-        if source and hasattr(source, "source_briefing"):
-            lines.append(source.source_briefing(v))
-    return _output("SessionStart", additionalContext=" ".join(lines)), state
+    text = briefing_text(state["rules"], runtime)
+    return (_output("SessionStart", additionalContext=text) if text else None), state
 
 
 def _leak_reason(state: dict, runtime: dict, target: str, people: list[str], extra_reads: list[str]) -> str:
@@ -292,15 +336,14 @@ def _leak_reason(state: dict, runtime: dict, target: str, people: list[str], ext
 
 # ---------------------------------------------------------------- vl's own files
 
-VL_COMMAND_RE = re.compile(r"(?:^|[\s;&|(`])(?:\S*/)?vl\s+(init|apply|uninstall|folder|vault)\b")
+VL_COMMAND_RE = re.compile(
+    r"(?:^|[\s;&|(`])(?:\S*/)?vl\s+(init|apply|uninstall|org|vault|migrate|gdrive\s+add)\b")
+VL_ENV_RE = re.compile(r"\bVAULTLINES_[A-Z_]+")
+GOOGLE = "Google sign-ins are for vl only. To get an original from Drive, run `vl gdrive fetch OWNER/REPO PATH`."
 
 
-def _config_dir(runtime: dict) -> str:
-    config = runtime.get("config")
-    if config:
-        return os.path.realpath(os.path.dirname(config))
-    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(_home(), ".config")
-    return os.path.realpath(os.path.join(base, "vaultlines"))
+def _config_file(runtime: dict) -> str:
+    return os.path.realpath(runtime.get("config") or str(vl_home() / "config.toml"))
 
 
 def _has_vl_hook(data) -> bool:
@@ -346,12 +389,19 @@ def self_guard(event: dict, runtime: dict) -> tuple[str, str] | None:
     tool = event.get("tool_name") or ""
     args = event.get("tool_input") or {}
     cwd = event.get("cwd") or os.getcwd()
-    for _, plugin, data in plugins.enabled(runtime):
-        reason = plugin.guard(tool, args, cwd, data) if hasattr(plugin, "guard") else None
-        if reason:
-            return "deny", reason
     state = os.path.realpath(str(state_dir()))
-    config = _config_dir(runtime)
+    config = _config_file(runtime)
+    google = os.path.realpath(str(google_dir()))
+    path = args.get(READ_TOOLS.get(tool) or WRITE_TOOLS.get(tool) or "")
+    if tool in SEARCH_TOOLS:
+        path = (_glob_root(args["pattern"]) if tool == "Glob" and isinstance(args.get("pattern"), str) else None) \
+            or args.get("path") or cwd
+    if isinstance(path, str) and path:
+        p = _abs(path, cwd)
+        if inside(p, google) or (tool in SEARCH_TOOLS and inside(google, p)):
+            return "deny", GOOGLE
+    if tool == "Bash" and isinstance(args.get("command"), str) and mentions(args["command"], google):
+        return "deny", GOOGLE
     if tool in WRITE_TOOLS:
         path = args.get(WRITE_TOOLS[tool])
         if not isinstance(path, str) or not path:
@@ -367,6 +417,8 @@ def self_guard(event: dict, runtime: dict) -> tuple[str, str] | None:
         command = args["command"]
         if mentions(command, state) or mentions(command, config):
             return "ask", "This command touches vl's own files (its config or session records)."
+        if VL_ENV_RE.search(command):
+            return "ask", "This command sets a VAULTLINES_ variable, which changes where vl looks."
         m = VL_COMMAND_RE.search(command)
         if m:
             return "ask", f"This runs `vl {m.group(1)}`, which changes what vl allows. (Mention vl in your message to skip this question.)"
@@ -379,8 +431,7 @@ ASKED_VL_RE = re.compile(r"\b(vl|vaultlines)\b", re.IGNORECASE)
 
 
 def _unknown_session(runtime: dict, project_dir: str) -> dict:
-    key, _ = folder_entry(runtime, project_dir)
-    state = lbl.new_session(key, lbl.ONLY_YOU, "unknown")
+    state = lbl.new_session(resolve(project_dir, runtime), lbl.ONLY_YOU, "unknown")
     state["why"] = "vl has no record of how it started"
     return state
 
@@ -412,26 +463,33 @@ def _pre_tool(event: dict, runtime: dict, state: dict | None, project_dir: str):
 def _vault_rules(event: dict, runtime: dict, state: dict | None, project_dir: str):
     if state is None:
         state = _unknown_session(runtime, project_dir)
-    folders = runtime.get("folders", {})
-    folder = folders.get(state.get("folder")) if state.get("folder") else None
+    rules = state.get("rules") or resolve(project_dir, runtime)
     try:
-        call = touched(event, runtime, folder)
+        call = touched(event, runtime, rules)
     except Blocked as e:
         return _pre("deny", str(e)), None
     if not call.vaults:
         return _pre(None, updated=call.updated_input), None
 
     # 1. Focus
-    allowed = [folder["writes"], *(folder.get("reads") or [])] if folder else []
+    allowed = [v for v in [rules.get("writes"), *(rules.get("reads") or [])] if v]
     outside = [v for v in call.vaults if v not in allowed]
     if outside:
-        if not folder:
-            reason = "No vaults are set up for this folder."
+        if not allowed:
+            reason = "No vaults are set up here."
         else:
-            reason = f"`{outside[0]}` is not used in this folder. {_here(folder)}"
+            reason = f"`{outside[0]}` isn't used here. {_here(rules)}"
             if call.search_root:
                 reason += f" {call.search_root} holds other vaults too: search a narrower folder."
         return _pre("deny", reason), None
+
+    # 5. Vaults filled from elsewhere are read-only
+    for v in call.writes:
+        if _filled(runtime, v):
+            source = plugins.SOURCES.get(runtime["vaults"][v].get("source"))
+            what = getattr(source, "NAME", None) or runtime["vaults"][v].get("source")
+            return _pre("deny", f"`{v}` is filled from {what}, so it's read-only. Save notes in "
+                                f"`{rules.get('writes')}`."), None
 
     # 2. Label: this call's reads count before its writes (e.g. `cp vaultA/x vaultB/`)
     label = lbl.from_json(state["label"])
@@ -447,9 +505,9 @@ def _vault_rules(event: dict, runtime: dict, state: dict | None, project_dir: st
         if people:
             reasons.append(_leak_reason(state, runtime, v, people, call.reads))
             decision = "deny" if on_leak == "block" or decision == "deny" else "ask"
-        elif v in (folder.get("reads") or []):
+        elif v in (rules.get("reads") or []):
             note = " Bash commands that mention a vault count as writes to it; use Read, Grep or Glob to only read." if call.bash else ""
-            reasons.append(f"`{v}` is a read vault in this folder, so writing to it asks first.{note}")
+            reasons.append(f"`{v}` is a read vault here, so writing to it asks first.{note}")
             decision = decision or "ask"
     if decision == "deny":
         return _pre("deny", " ".join(reasons) + ' (on_leak = "block")'), None
@@ -460,12 +518,14 @@ def _vault_rules(event: dict, runtime: dict, state: dict | None, project_dir: st
     return _pre(decision, " ".join(reasons), call.updated_input), new_state
 
 
-def decide(event: dict, runtime: dict, state: dict | None, project_dir: str = "", briefing: list[str] = ()):
-    """Returns (hook output or None, the session's new state or None if unchanged)."""
+def decide(event: dict, runtime: dict, state: dict | None, project_dir: str = "", briefing: list[str] = (),
+           rules: dict | None = None):
+    """Returns (hook output or None, the session's new state or None if unchanged).
+    `rules`: the session's rules, if already worked out (SessionStart)."""
     name = event.get("hook_event_name")
     project_dir = project_dir or event.get("cwd") or ""
     if name == "SessionStart":
-        return _session_start(event, runtime, state, project_dir, list(briefing))
+        return _session_start(event, runtime, state, project_dir, list(briefing), rules)
     if name == "PreToolUse":
         return _pre_tool(event, runtime, state, project_dir)
     if name == "UserPromptSubmit":
@@ -508,7 +568,7 @@ def run(event: dict, env: dict | None = None) -> dict | None:
         return None
     try:
         runtime = json.loads(path.read_text())
-        runtime["vaults"], runtime["folders"]
+        runtime["vaults"], runtime["owners"]
     except Exception as e:  # noqa: BLE001 - can't tell where the vaults are, so every matched call might touch one
         if name == "PreToolUse":
             return _pre("deny", f"{ERROR} (runtime.json can't be read: {e})", prefix="")
@@ -520,10 +580,9 @@ def run(event: dict, env: dict | None = None) -> dict | None:
     try:
         project_dir = env.get("CLAUDE_PROJECT_DIR") or event.get("cwd") or ""
         session_id = str(event.get("session_id") or "unknown")
-        briefing = [v for _, plugin, data in plugins.enabled(runtime) if hasattr(plugin, "context_vaults")
-                    for v in plugin.context_vaults(project_dir, data)] if name == "SessionStart" else []
+        rules, briefing = (_start(project_dir, runtime) if name == "SessionStart" else (None, []))
         with lbl.session(state_dir(), session_id) as box:
-            out, new_state = decide(event, runtime, box[0], project_dir, briefing)
+            out, new_state = decide(event, runtime, box[0], project_dir, briefing, rules)
             if new_state is not None:
                 box[0] = new_state
         return out
@@ -531,6 +590,53 @@ def run(event: dict, env: dict | None = None) -> dict | None:
         if name == "PreToolUse" and _may_touch_vault(event, runtime):
             return _pre("deny", f"{ERROR} ({type(e).__name__}: {e})", prefix="")
         return None
+
+
+def _context_vaults(project_dir: str, runtime: dict) -> list[str]:
+    return [v for _, plugin, data in plugins.enabled(runtime) if hasattr(plugin, "context_vaults")
+            for v in plugin.context_vaults(project_dir, data)]
+
+
+def _start(project_dir: str, runtime: dict) -> tuple[dict, list[str]]:
+    """SessionStart's I/O: the rules, the plugins' setup for them, and what the plugins
+    brief the session from. Plugins' own SessionStart hooks may run before or after this
+    one, so both what they read before the setup and after it count as read."""
+    rules = resolve(project_dir, runtime)
+    before = _context_vaults(project_dir, runtime)
+    for _, plugin, data in plugins.enabled(runtime):
+        if hasattr(plugin, "session_start"):
+            try:
+                plugin.session_start(rules, runtime, data)
+            except Exception:  # noqa: BLE001, S110 - setup is a convenience; the checks don't depend on it
+                pass
+    after = _context_vaults(project_dir, runtime)
+    if rules.get("how") in REPO_HOWS and rules.get("root") and rules.get("repo"):
+        _record_clone(rules["root"], rules["repo"])
+    return rules, list(dict.fromkeys(before + after))
+
+
+def _record_clone(root: str, repo: str) -> None:
+    """Remember where a repo is cloned, so `vl apply` keeps its setup current and auto_pull finds it."""
+    import fcntl
+
+    path = clones_path()
+    try:
+        found = json.loads(path.read_text())
+    except (OSError, ValueError):
+        found = {}
+    if found.get(root) == repo:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path.with_suffix(".lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            found = json.loads(path.read_text())
+        except (OSError, ValueError):
+            found = {}
+        found[root] = repo
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(found, indent=1, sort_keys=True) + "\n")
+        tmp.replace(path)
 
 
 def main() -> None:

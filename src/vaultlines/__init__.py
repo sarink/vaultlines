@@ -1,6 +1,6 @@
 """Personal and team markdown vaults for Claude Code, guarded by a session label."""
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 
 def main() -> None:

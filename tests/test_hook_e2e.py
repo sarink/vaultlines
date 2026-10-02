@@ -38,7 +38,7 @@ def decision(out):
 
 
 def state_file(world, session_id) -> dict:
-    root = Path(os.environ["XDG_STATE_HOME"]) / "vaultlines" / "sessions"
+    root = Path(os.environ["VAULTLINES_HOME"]) / "state" / "sessions"
     return json.loads((root / f"{session_id}.json").read_text())
 
 
@@ -51,12 +51,13 @@ def live(world):
 def test_a_session_and_its_subagent_share_one_label(live):
     w = live
     sid = "f427a213-8b5f-4eb3-96e9-2571f40724d1"
-    out = hook(w, start(sid, w.acme))
-    assert "acme-founders" in out["hookSpecificOutput"]["additionalContext"]
-    assert decision(hook(w, tool(sid, w.acme, "Read", {"file_path": w.vault("acme-founders", "plan.md")}))) is None
-    assert state_file(w, sid)["read"] == ["acme-founders"]
+    out = hook(w, start(sid, w.site))
+    assert "acme-everyone" in out["hookSpecificOutput"]["additionalContext"]
+    assert state_file(w, sid)["read"] == ["acme-everyone"]  # the Basic Memory plugin briefs from it
+    assert decision(hook(w, tool(sid, w.site, "Read", {"file_path": w.vault("acme-founders", "plan.md")}))) is None
+    assert state_file(w, sid)["read"] == ["acme-everyone", "acme-founders"]
     # A subagent: same session_id, plus agent_id and agent_type.
-    out = hook(w, tool(sid, w.acme, "Write", {"file_path": w.vault("acme-everyone", "x.md"), "content": "hi"},
+    out = hook(w, tool(sid, w.site, "Write", {"file_path": w.vault("acme-everyone", "x.md"), "content": "hi"},
                        agent_id="aa5903a262d114864", agent_type="general-purpose"))
     assert decision(out) == "ask"
     assert "ana" in out["hookSpecificOutput"]["permissionDecisionReason"]
@@ -80,16 +81,26 @@ def test_basic_memory_rewrite(live):
 
 def test_other_tools_print_nothing(live):
     w = live
-    assert hook(w, tool("x", w.home, "WebSearch", {"query": "hi"})) is None
+    assert hook(w, tool("x", w.desktop, "WebSearch", {"query": "hi"})) is None
     assert hook(w, {"hook_event_name": "Stop", "session_id": "x"}) is None
 
 
 def test_the_briefing_is_read_from_the_plugin_settings(live):
     w = live
-    (w.acme / ".claude").mkdir()
-    (w.acme / ".claude" / "settings.local.json").write_text(json.dumps({"basicMemory": {"primaryProject": "acme-founders"}}))
+    (w.site / ".claude").mkdir()
+    (w.site / ".claude" / "settings.local.json").write_text(json.dumps({"basicMemory": {"primaryProject": "acme-founders"}}))
     hook(w, start("brief", w.api), project_dir=w.api)
-    assert state_file(w, "brief")["read"] == ["acme-founders"]
+    # What the plugin may already have read (founders), and what vl points it at now (everyone).
+    assert state_file(w, "brief")["read"] == ["acme-founders", "acme-everyone"]
+    assert json.loads((w.site / ".claude" / "settings.local.json").read_text())["basicMemory"]["primaryProject"] == "acme-everyone"
+
+
+def test_session_start_records_the_clone(live):
+    w = live
+    hook(w, start("clone", w.api), project_dir=w.api)
+    hook(w, start("other", w.desktop), project_dir=w.desktop)
+    clones = json.loads((w.vl / "state" / "clones.json").read_text())
+    assert clones == {str(w.site): "acme/site"}
 
 
 def test_errors_fail_closed_only_for_vault_calls(live):
@@ -97,20 +108,20 @@ def test_errors_fail_closed_only_for_vault_calls(live):
     from vaultlines.hook import runtime_path
 
     runtime_path().write_text("{not json")
-    out = hook(w, tool("e", w.acme, "Read", {"file_path": w.vault("acme-founders", "a.md")}))
+    out = hook(w, tool("e", w.site, "Read", {"file_path": w.vault("acme-founders", "a.md")}))
     assert decision(out) == "deny"
     assert out["hookSpecificOutput"]["permissionDecisionReason"].startswith("vl hook error: run `vl doctor`")
-    assert decision(hook(w, tool("e", w.acme, "Read", {"file_path": str(w.acme / "README.md")}))) == "deny"
-    assert hook(w, start("e", w.acme)) is None
+    assert decision(hook(w, tool("e", w.site, "Read", {"file_path": str(w.site / "README.md")}))) == "deny"
+    assert hook(w, start("e", w.site)) is None
     # A crash inside decide() only blocks calls that may touch a vault.
-    w.runtime["folders"][str(w.acme)] = "not a table"
+    w.runtime["owners"]["acme"] = "not a table"
     write_runtime(w)
-    assert decision(hook(w, tool("e", w.acme, "Read", {"file_path": w.vault("acme-founders", "a.md")}))) == "deny"
-    assert hook(w, tool("e", w.acme, "Read", {"file_path": str(w.acme / "README.md")})) is None
+    assert decision(hook(w, tool("e2", w.site, "Read", {"file_path": w.vault("acme-founders", "a.md")}))) == "deny"
+    assert hook(w, tool("e2", w.site, "Read", {"file_path": str(w.site / "README.md")})) is None
     # No runtime.json at all: vl isn't set up, so only Basic Memory calls are refused.
     runtime_path().unlink()
-    assert decision(hook(w, tool("e", w.acme, "mcp__basic-memory__read_note", {"identifier": "x"}))) == "deny"
-    assert hook(w, tool("e", w.acme, "Read", {"file_path": w.vault("acme-founders", "a.md")})) is None
+    assert decision(hook(w, tool("e", w.site, "mcp__basic-memory__read_note", {"identifier": "x"}))) == "deny"
+    assert hook(w, tool("e", w.site, "Read", {"file_path": w.vault("acme-founders", "a.md")})) is None
 
 
 def test_bad_stdin_is_harmless(live):
@@ -120,10 +131,10 @@ def test_bad_stdin_is_harmless(live):
 
 def test_parallel_calls_dont_lose_reads(live):
     w = live
-    hook(w, start("par", w.side_project))
-    events = [tool("par", w.side_project, "Read", {"file_path": w.vault(v, "x.md")})
-              for v in ("acme-founders", "acme", "side", "handbook")]
-    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(w.side_project)}
+    hook(w, start("par", w.sheety))
+    events = [tool("par", w.sheety, "Read", {"file_path": w.vault(v, "x.md")})
+              for v in ("acme-founders", "acme-slack", "acme-docs", "acme-handbook")]
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(w.sheety)}
     procs = [subprocess.Popen([VL, "hook"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=env)
              for _ in events]
     for p, e in zip(procs, events):
@@ -131,14 +142,15 @@ def test_parallel_calls_dont_lose_reads(live):
         p.stdin.close()
     for p in procs:
         p.wait()
-    assert sorted(state_file(w, "par")["read"]) == ["acme", "acme-founders", "handbook", "side"]
+    assert sorted(state_file(w, "par")["read"]) == ["acme-docs", "acme-founders", "acme-handbook",
+                                                    "acme-sam-personal", "acme-slack"]  # + the briefing
 
 
 def test_speed(live):
     w = live
-    hook(w, start("speed", w.acme))
-    event = json.dumps(tool("speed", w.acme, "Read", {"file_path": w.vault("acme-everyone", "a.md")}))
-    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(w.acme)}
+    hook(w, start("speed", w.site))
+    event = json.dumps(tool("speed", w.site, "Read", {"file_path": w.vault("acme-everyone", "a.md")}))
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(w.site)}
     runs = 10
     t = time.perf_counter()
     for _ in range(runs):

@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING
 from .api import Access, here
 
 if TYPE_CHECKING:
-    from ..config import Config, Folder
+    from ..config import Config
 
 SERVER = "basic-memory"
 TOOL_PREFIX = f"mcp__{SERVER}__"
@@ -158,7 +158,7 @@ def resolve(tool: str, args: dict, projects: list[str], default_project: str | N
         if tool in NEEDS_PROJECT:
             return Resolved(kind, block=f"Pass project=\"...\" to {tool}; without it, it looks at every vault.")
         if default_project is None:
-            return Resolved(kind, block="No vaults are set up for this folder.")
+            return Resolved(kind, block="No vaults are set up here.")
         updated = {**args, "project": default_project}
         used.append(default_project)
     elif not isinstance(project, str) or "/" in project.strip().strip("/"):
@@ -177,10 +177,11 @@ def resolve(tool: str, args: dict, projects: list[str], default_project: str | N
 
 # ---------------------------------------------------------------- the hook's side
 
-def on_call(tool: str, args: dict, folder: dict | None, data: dict) -> Access:
-    """Which vaults a call touches. `folder` is the session's folder entry in runtime.json."""
+def on_call(tool: str, args: dict, rules: dict | None, data: dict) -> Access:
+    """Which vaults a call touches. `rules` is the session's {"writes", "reads"}."""
     projects = data["projects"]  # project -> vault, or None for a project that isn't a vault
-    default = next((p for p, v in projects.items() if v == folder["writes"]), None) if folder else None
+    writes = (rules or {}).get("writes")
+    default = next((p for p, v in projects.items() if v == writes), None) if writes else None
     r = resolve(tool[len(TOOL_PREFIX):], args, list(projects), default)
     if r.block:
         return Access(r.kind, block=r.block)
@@ -188,7 +189,7 @@ def on_call(tool: str, args: dict, folder: dict | None, data: dict) -> Access:
     for project in r.projects:
         vault = projects.get(project)
         if vault is None:
-            return Access(r.kind, block=f"Basic Memory project '{project}' isn't a vault vl knows. {here(folder)}")
+            return Access(r.kind, block=f"Basic Memory project '{project}' isn't a vault vl knows. {here(rules)}")
         vaults.append(vault)
     return Access(r.kind, vaults, updated_input=r.updated_input)
 
@@ -242,6 +243,47 @@ def plugin_projects(project_dir: str) -> list[str]:
         if isinstance(ref, str) and ref.strip() and ref.strip() not in out:
             out.append(ref.strip())
     return out
+
+
+REPO_HOWS = ("repos", "notes_from", "personal", "conflict")
+
+
+def _ours(block) -> bool:
+    """A block vl wrote: plugin_block()'s keys and nothing else."""
+    return isinstance(block, dict) and set(block) == {"primaryProject", "captureFolder", "captureEvents"} \
+        and block.get("captureFolder") == "sessions" and block.get("captureEvents") is False
+
+
+def session_start(rules: dict, runtime: dict, data: dict) -> None:
+    """Point the Basic Memory Claude Code plugin at the session's vault, in the repo (or
+    [folders] entry) the session runs in. Where your personal vault applies anyway, the
+    user-level block covers it, so vl's block is removed. Called by the hook at SessionStart,
+    and by `vl apply` for each repo Claude ran in."""
+    from .. import claude
+
+    if not data.get("plugin"):
+        return
+    target = rules.get("root") if rules.get("how") in REPO_HOWS else rules.get("folder")
+    if not target or not os.path.isdir(target):
+        return
+    if os.path.realpath(target) == os.path.realpath(os.path.expanduser("~")):
+        return  # the user-level block
+    path = Path(target) / ".claude" / "settings.local.json"
+    try:
+        current = json.loads(path.read_text()).get("basicMemory")
+    except (OSError, ValueError, AttributeError):
+        current = None
+    default = (runtime.get("default") or {}).get("writes")
+    writes = rules.get("writes")
+    if not writes or writes == default:
+        if _ours(current):
+            claude.update_settings(path, None)
+        return
+    if writes not in (data.get("projects") or {}).values():
+        return  # not a Basic Memory project yet; `vl apply` registers it
+    if current != plugin_block(writes):
+        claude.update_settings(path, plugin_block(writes))
+        claude.git_ignore_local_settings(target)
 
 
 def context_vaults(project_dir: str, data: dict) -> list[str]:
@@ -355,46 +397,11 @@ def plugin_block(project: str) -> dict:
     return {"primaryProject": project, "captureFolder": "sessions", "captureEvents": False}
 
 
-def plugin_targets(cfg: Config) -> dict[str, Folder]:
-    """Settings file -> the folder whose writes vault the Basic Memory plugin should use there.
-
-    Folders that hold your home folder ("~", "/") are covered by the user-level block,
-    which the plugin reads everywhere a closer settings file doesn't override it.
-    """
+def _set_block(path: Path, project: str | None, warnings: list[str]) -> bool:
+    """Point the Basic Memory plugin at `project` in one settings file (None: remove vl's block)."""
     from .. import claude
-    from ..config import folder_for
-    from ..util import home
 
-    me = str(home().resolve())
-    targets = {}
-    top = folder_for(cfg, me)
-    if top:
-        targets[str(claude.plugin_user_settings_path())] = top
-    for f in cfg.listed():
-        if not (f.path == me or me.startswith(f.path.rstrip("/") + "/")):
-            targets[str(claude.folder_settings_path(f.path))] = f
-    return targets
-
-
-def _plugin_blocks(wanted: dict[str, Folder], before: list[str], warnings: list[str]) -> list[str]:
-    """Point the Basic Memory plugin at each listed folder's writes vault; remove old blocks.
-
-    Returns the settings files that now hold a block.
-    """
-    from .. import claude
-    from ..util import contract
-
-    for old in before:
-        if old not in wanted and Path(old).exists():
-            claude.update_settings(Path(old), None)
-    for path, f in wanted.items():
-        if not Path(f.path).is_dir():
-            warnings.append(f"folder {contract(f.path)} is missing")
-            continue
-        claude.update_settings(Path(path), plugin_block(f.writes))
-        if path != str(claude.plugin_user_settings_path()):
-            claude.git_ignore_local_settings(f.path)
-    return sorted(wanted)
+    return claude.update_settings(path, plugin_block(project) if project else None)
 
 
 def init(cfg: Config, settings: dict) -> None:
@@ -408,37 +415,56 @@ def init(cfg: Config, settings: dict) -> None:
 
 
 def apply(cfg: Config, settings: dict, state: dict, warnings: list[str]) -> dict:
-    """Register every vault as a project, add the one server, and point the plugin at each folder."""
+    """Register every vault as a project named by its short name, add the one server, and
+    point the plugin at your personal vault (and, in repos, at the repo's vault)."""
     from .. import claude
-    from ..config import folder_for
-    from ..util import home
 
     current = projects(settings)
-    for v in cfg.vaults.values():
+    shorts = cfg.shorts
+    paths = {str(v.path.resolve()) for v in cfg.vaults.values()}
+    for name in state.get("projects", []):
+        # A vault that's gone (you left its owner) or renamed: its project goes too.
+        if name in current and name not in shorts.values() and str(current[name]) not in paths:
+            remove_project(settings, name)
+            del current[name]
+    for vid, v in cfg.vaults.items():
         if v.path.exists():
-            ensure_project(settings, v.name, v.path, current)
+            ensure_project(settings, shorts[vid], v.path, current)
     argv = mcp_argv(settings)
     server = claude.user_servers().get(SERVER)
     if server is None or not claude.same_server(server, argv):
         claude.add_server(SERVER, argv, "user")
-    top = folder_for(cfg, home())
-    if top and top.writes in current:
-        set_default(settings, top.writes)
-    return {"blocks": _plugin_blocks(plugin_targets(cfg), state.get("blocks", []), warnings)}
+    mine = cfg.personal(cfg.me) if cfg.me else None
+    if mine and shorts[mine] in current:
+        set_default(settings, shorts[mine])
+    blocks = []
+    if mine:  # before `vl init` there's no personal vault: leave the block alone
+        _set_block(claude.plugin_user_settings_path(), shorts[mine], warnings)
+        blocks.append(str(claude.plugin_user_settings_path()))
+    return {"projects": sorted(shorts[vid] for vid in cfg.vaults), "blocks": blocks}
 
 
 def off(state: dict, warnings: list[str]) -> None:
-    _plugin_blocks({}, state.get("blocks", []), warnings)
+    """Remove the user-level block, and vl's block in each repo Claude ran in."""
+    from ..util import clones_path, read_json
+
+    for path in state.get("blocks", []):
+        if Path(path).exists():
+            _set_block(Path(path), None, warnings)
+    for root in read_json(clones_path(), {}):
+        path = Path(root) / ".claude" / "settings.local.json"
+        try:
+            if _ours(json.loads(path.read_text()).get("basicMemory")):
+                _set_block(path, None, warnings)
+        except (OSError, ValueError, AttributeError):
+            continue
 
 
 def data(cfg: Config, settings: dict) -> dict:
-    by_path = {str(v.path): name for name, v in cfg.vaults.items()}
+    shorts = cfg.shorts
+    by_path = {str(v.path.resolve()): shorts[vid] for vid, v in cfg.vaults.items()}
     return {"plugin": plugin_installed(),
             "projects": {p: by_path.get(str(folder)) for p, folder in sorted(projects(settings).items())}}
-
-
-def vault_removed(cfg: Config, settings: dict, name: str) -> None:
-    remove_project(settings, name)
 
 
 def doctor(cfg: Config, settings: dict, check) -> None:
@@ -453,12 +479,17 @@ def doctor(cfg: Config, settings: dict, check) -> None:
     check(bool(found), f"{tool}: {found or 'not found'}")
     check(setting(settings, "disable_permalinks").lower().endswith("true"), "permalinks off", "vl init")
     current = projects(settings)
-    for v in cfg.vaults.values():
-        check(current.get(v.name) == v.path, f"vault '{v.name}' is a Basic Memory project", "vl apply")
+    shorts = cfg.shorts
+    for vid, v in sorted(cfg.vaults.items()):
+        check(current.get(shorts[vid]) == v.path.resolve(), f"{vid} is the Basic Memory project '{shorts[vid]}'",
+              "vl apply")
     server = claude.user_servers().get(SERVER)
     check(server is not None and claude.same_server(server, mcp_argv(settings)),
           f"one '{SERVER}' server for every vault", "vl apply")
     check(plugin_installed(), "Basic Memory plugin installed", "vl init")
-    for path, f in plugin_targets(cfg).items():
-        block = read_json(Path(path), {}).get("basicMemory") or {}
-        check(block.get("primaryProject") == f.writes, f"{contract(path)}: plugin writes to {f.writes}", "vl apply")
+    mine = cfg.personal(cfg.me) if cfg.me else None
+    if mine:
+        path = claude.plugin_user_settings_path()
+        block = read_json(path, {}).get("basicMemory") or {}
+        check(block.get("primaryProject") == shorts[mine], f"{contract(path)}: plugin writes to {shorts[mine]}",
+              "vl apply")

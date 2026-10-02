@@ -27,6 +27,19 @@ def missing(paths: list[Path]) -> list[Path]:
     return [p for p in paths if p not in known]
 
 
+def relocate(moved: dict[str, str]) -> bool:
+    """Point Obsidian's vaults that moved (old folder -> new) to their new folders.
+    Returns False if Obsidian is open, so nothing changed."""
+    if not installed() or running():
+        return False
+    data = read_json(_config(), {})
+    for v in data.get("vaults", {}).values():
+        if v.get("path") in moved:
+            v["path"] = moved[v["path"]]
+    write_json(_config(), data)
+    return True
+
+
 def register(paths: list[Path]) -> list[Path]:
     """Add vaults Obsidian doesn't know yet. Returns the ones that still need adding.
 

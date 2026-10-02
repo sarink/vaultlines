@@ -3,18 +3,11 @@
 from __future__ import annotations
 
 import getpass
-import os
-import re
 import socket
 from pathlib import Path
 
 from .util import VlError, run
 
-GITHUB_RE = re.compile(r"^https://github\.com/([A-Za-z0-9-]+)/([A-Za-z0-9._-]+?)(?:\.git)?/?$")
-# Other ways git writes a GitHub remote, e.g. an origin set up over SSH.
-GITHUB_ANY_RE = re.compile(
-    r"^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)([A-Za-z0-9-]+)/([A-Za-z0-9._-]+?)(?:\.git)?/?$"
-)
 GITIGNORE = ["sessions/", ".obsidian/", ".DS_Store"]
 GITATTRIBUTES = ["*.md merge=union"]
 
@@ -41,10 +34,23 @@ def ensure_identity(path: Path) -> None:
     """Commits need a name. Use the GitHub login, or the computer user."""
     if git(path, "config", "user.email", check=False).stdout.strip():
         return
-    login = run(["gh", "api", "user", "--jq", ".login"], check=False).stdout.strip()
+    from .github import login as github_login
+
+    login = github_login()
     name = login or getpass.getuser()
     git(path, "config", "user.name", name)
     git(path, "config", "user.email", f"{name}@users.noreply.github.com" if login else f"{name}@{socket.gethostname()}")
+
+
+def ensure_local_rules(path: Path) -> None:
+    """vl's git rules for this clone, whatever the vault's own files say (a vault made by
+    hand may have none): session checkpoints stay on this computer, and when two people
+    edit one note, both sides are kept."""
+    info = path / ".git" / "info"
+    if (path / ".git").is_dir():
+        info.mkdir(parents=True, exist_ok=True)
+        _ensure_lines(info / "exclude", GITIGNORE, "# Added by vaultlines: these stay on this computer")
+        _ensure_lines(info / "attributes", GITATTRIBUTES, "# Added by vaultlines: keep both sides of a note")
 
 
 def init_repo(path: Path) -> None:
@@ -53,39 +59,11 @@ def init_repo(path: Path) -> None:
         git(path, "init", "-q", "-b", "main")
     _ensure_lines(path / ".gitignore", GITIGNORE, "# Session checkpoints stay on each computer")
     _ensure_lines(path / ".gitattributes", GITATTRIBUTES, "# When two people edit one note, keep both sides")
+    ensure_local_rules(path)
     ensure_identity(path)
     git(path, "add", "-A")
     if git(path, "diff", "--cached", "--quiet", check=False).returncode != 0:
         git(path, "commit", "-q", "-m", "Set up vault")
-
-
-def test_remotes() -> bool:
-    """Tests use file:// remotes in place of GitHub."""
-    return os.environ.get("VAULTLINES_TEST_REMOTES") == "1"
-
-
-def check_remote(url: str) -> None:
-    if test_remotes() and url.startswith("file://"):
-        return
-    if not GITHUB_RE.match(url):
-        raise VlError(f"remotes must be GitHub URLs like https://github.com/OWNER/REPO.git, not {url}")
-
-
-def parse_github(url: str) -> tuple[str, str]:
-    m = GITHUB_ANY_RE.match(url)
-    if not m:
-        raise VlError(f"Not a GitHub URL: {url}")
-    return m.group(1), m.group(2)
-
-
-def github_url(owner_repo: str) -> str:
-    return f"https://github.com/{owner_repo}.git"
-
-
-def repo_key(url: str) -> str:
-    """The same repo gives the same key, whether written as https or ssh."""
-    m = GITHUB_ANY_RE.match(url)
-    return f"{m.group(1)}/{m.group(2)}".lower() if m else url
 
 
 def in_work_tree(path: Path) -> bool:
@@ -105,11 +83,8 @@ def set_remote(path: Path, url: str) -> None:
         git(path, "remote", "add", "origin", url)
 
 
-def create_github_repo(path: Path, owner_repo: str) -> str:
-    """Create a private GitHub repo from the vault and push it."""
-    run(["gh", "repo", "create", owner_repo, "--private", "--source", str(path),
-         "--remote", "origin", "--push"])
-    return github_url(owner_repo)
+def has_commits(path: Path) -> bool:
+    return git(path, "rev-parse", "--verify", "-q", "HEAD", check=False).returncode == 0
 
 
 def clone(url: str, path: Path) -> None:
@@ -143,6 +118,7 @@ def sync(path: Path) -> str:
     """Commit local changes, get others' changes, send ours. Returns a short status."""
     if not is_repo(path):
         raise VlError(f"{path} is not a git repo. Run `vl apply` to set it up.")
+    ensure_local_rules(path)
     committed = commit(path, f"Notes from {getpass.getuser()}@{socket.gethostname().split('.')[0]}")
     if not remote_url(path):
         return "committed (no remote)" if committed else "synced"
@@ -160,3 +136,35 @@ def sync(path: Path) -> str:
 
 def pull_only(path: Path) -> None:
     git(path, "pull", "-q", "--ff-only")
+
+
+def pull_keeping_changes(path: Path) -> str:
+    """For vaults filled from elsewhere: take the remote as it is. Local changes, which
+    shouldn't happen, are saved on a branch `local-changes-DATE` first."""
+    import time
+
+    if not is_repo(path):
+        raise VlError(f"{path} is not a git repo.")
+    if not remote_url(path):
+        return "no remote"
+    b = branch(path)
+    if git(path, "fetch", "-q", "origin", check=False).returncode != 0:
+        raise VlError("couldn't get new notes (fetch failed)")
+    if not git(path, "rev-parse", "--verify", "-q", f"origin/{b}", check=False).stdout.strip():
+        return "nothing on GitHub yet"
+    dirty = pending_changes(path) > 0
+    ahead = git(path, "rev-list", "--count", f"origin/{b}..HEAD", check=False).stdout.strip() not in ("", "0")
+    saved = ""
+    if dirty or ahead:
+        saved = f"local-changes-{time.strftime('%Y-%m-%d-%H%M%S')}"
+        git(path, "checkout", "-q", "-b", saved)
+        git(path, "add", "-A", "--", ".", ":!sessions", ":!.obsidian")  # these stay on this computer
+        if git(path, "diff", "--cached", "--quiet", check=False).returncode != 0:
+            git(path, "commit", "-q", "-m", "Local changes, saved by vl before taking the vault from GitHub")
+        git(path, "checkout", "-q", b)
+    git(path, "reset", "-q", "--hard", f"origin/{b}")
+    git(path, "clean", "-q", "-fd", "-e", "sessions/", "-e", ".obsidian/")
+    if saved:
+        return (f"synced. This vault is filled on GitHub, so local changes were moved to the branch "
+                f"{saved}")
+    return "synced"

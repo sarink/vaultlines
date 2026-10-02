@@ -2,7 +2,8 @@
 
 vaultlines owns only these things, so it can rewrite them safely:
   - hooks whose command is `vl hook`
-  - the "basicMemory" block (read by the Basic Memory plugin) in listed folders
+  - the "basicMemory" block (read by the Basic Memory plugin), at user level and in the
+    repos (and [folders] entries) Claude runs in
   - the one user-level MCP server named "basic-memory", when the Basic Memory plugin is on
 It also removes what vaultlines 0.2 left behind: "vl-*" servers and "mcp__vl-*" rules.
 """
@@ -33,13 +34,6 @@ def user_settings_path() -> Path:
 def plugin_user_settings_path() -> Path:
     """The Basic Memory plugin always reads ~/.claude/settings.json, whatever CLAUDE_CONFIG_DIR says."""
     return home() / ".claude" / "settings.json"
-
-
-def folder_settings_path(folder: str) -> Path:
-    """Where a listed folder's basicMemory block goes. Your home folder's is the user-level one."""
-    if Path(folder) == home().resolve() or Path(folder) == home():
-        return plugin_user_settings_path()
-    return Path(folder) / ".claude" / "settings.local.json"
 
 
 def state_path() -> Path:

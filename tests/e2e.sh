@@ -1,9 +1,8 @@
 #!/bin/bash
-# End-to-end test on two fake computers ("alice" and "bob") with local git remotes
-# standing in for GitHub, and a fake list of who can see each one.
-# Touches nothing outside a temporary folder. Needs git, jq, uv and claude (and rclone
-# for the Drive section, which is skipped without it). The Drive section uses a local
-# folder as the remote, so it never reaches Google.
+# End-to-end test on two fake computers, "alice" and "bob", in the fake GitHub org mixim-ai.
+# A JSON file and bare repos stand in for GitHub, a local server for Google, and a local
+# folder for the shared drive. Touches nothing outside a temporary folder. Needs git, jq,
+# uv and claude (and rclone for the Drive section, which is skipped without it).
 #
 #   tests/e2e.sh            run and clean up
 #   KEEP=1 tests/e2e.sh     keep the temporary folder to look around
@@ -12,7 +11,8 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 ROOT="$(cd "$(mktemp -d)" && pwd -P)"
 REAL_HOME="$HOME"
-trap '[ "${KEEP:-}" = 1 ] && echo "kept: $ROOT" || rm -rf "$ROOT"' EXIT
+GOOGLE_PID=""
+trap '[ -n "$GOOGLE_PID" ] && kill "$GOOGLE_PID" 2>/dev/null; [ "${KEEP:-}" = 1 ] && echo "kept: $ROOT" || rm -rf "$ROOT"' EXIT
 trap 'echo "  FAIL  command on line $LINENO exited with an error"' ERR
 
 pass() { echo "  ok    $*"; }
@@ -20,21 +20,17 @@ fail() { echo "  FAIL  $*"; exit 1; }
 check() { local what="$1"; shift; if "$@" >/dev/null 2>&1; then pass "$what"; else fail "$what"; fi; }
 refuses() { local what="$1"; shift; if "$@" >/dev/null 2>&1; then fail "$what"; else pass "$what"; fi; }
 
-mkdir -p "$ROOT/remotes" "$ROOT/alice" "$ROOT/bob"
-R="file://$ROOT/remotes"
-
-# Who can see each remote, as GitHub would report it. Change it to simulate GitHub changes.
-AUDIENCES="$(jq -nc --arg r "$R" '{
-  ($r + "/acme-founders.git"): ["alice", "carol"],
-  ($r + "/acme-everyone.git"): ["alice", "bob", "carol"]
-}')"
+GH="$ROOT/github.json"
+R="$ROOT/remotes"
+mkdir -p "$R" "$ROOT/alice" "$ROOT/bob"
+GOOGLE="http://127.0.0.1:9"  # set below, once the fake Google runs
 
 # Run vl (or any command) as one of the fake computers.
 as() {
   local who="$1"; shift
-  HOME="$ROOT/$who" CLAUDE_CONFIG_DIR="$ROOT/$who/.claude" VAULTLINES_NO_LAUNCHD=1 VAULTLINES_NO_NOTIFY=1 \
-    XDG_CONFIG_HOME="$ROOT/$who/.config" XDG_STATE_HOME="$ROOT/$who/.local/state" \
-    VAULTLINES_TEST_REMOTES=1 VAULTLINES_FAKE_AUDIENCE="$(jq -c --arg me "$who" '. + {me: $me}' <<<"$AUDIENCES")" \
+  HOME="$ROOT/$who" VAULTLINES_HOME="$ROOT/$who/.vaultlines" CLAUDE_CONFIG_DIR="$ROOT/$who/.claude" \
+    VAULTLINES_NO_LAUNCHD=1 VAULTLINES_NO_NOTIFY=1 VAULTLINES_TEST_REMOTES=1 \
+    VAULTLINES_FAKE_GITHUB="$GH" VAULTLINES_FAKE_LOGIN="$who" VAULTLINES_FAKE_GOOGLE="$GOOGLE" \
     UV_CACHE_DIR="${UV_CACHE_DIR:-$REAL_HOME/.cache/uv}" HF_HOME="${HF_HOME:-$REAL_HOME/.cache/huggingface}" \
     GIT_CONFIG_GLOBAL="$ROOT/$who/.gitconfig" "$@"
 }
@@ -43,238 +39,284 @@ bmtool() {
   local who="$1" out; shift
   out="$(as "$who" uvx basic-memory tool "$@" 2>&1)" || { echo "$out" | tail -5; return 1; }
 }
-user_servers() { jq -r '.mcpServers // {} | keys | join(",")' "$ROOT/$1/.claude/.claude.json"; }
-folder_servers() { jq -r --arg f "$2" '.projects[$f].mcpServers // {} | keys | join(",")' "$ROOT/$1/.claude/.claude.json"; }
-runtime() { cat "$ROOT/$1/.local/state/vaultlines/runtime.json"; }
+runtime() { cat "$ROOT/$1/.vaultlines/state/runtime.json"; }
+session() { cat "$ROOT/$1/.vaultlines/state/sessions/$2.json"; }
+
 # Feed one hook event to `vl hook` as Claude Code would, and print the decision.
 hook() {
   local who="$1" cwd="$2" event="$3" out
   out="$(jq -c --arg cwd "$cwd" '. + {cwd: $cwd, session_id: (.session_id // "e2e-session")}' <<<"$event" \
-    | CLAUDE_PROJECT_DIR="$cwd" vl "$who" hook)"
+    | (cd "$cwd" && CLAUDE_PROJECT_DIR="$cwd" vl "$who" hook))"
   if [ -z "$out" ]; then echo allow; return; fi
   jq -r '.hookSpecificOutput.permissionDecision // .hookSpecificOutput.additionalContext // "allow"' <<<"$out"
 }
-write_event() { jq -nc --arg p "$1" '{hook_event_name: "PreToolUse", tool_name: "Write", tool_input: {file_path: $p, content: "x"}}'; }
-read_event() { jq -nc --arg p "$1" '{hook_event_name: "PreToolUse", tool_name: "Read", tool_input: {file_path: $p}}'; }
+start() { hook "$1" "$2" "$(jq -nc --arg s "$3" '{hook_event_name: "SessionStart", source: "startup", session_id: $s}')"; }
+writes_of() { start "$1" "$2" "$3" >/dev/null; session "$1" "$3" | jq -r '.rules.writes'; }
+write_event() { jq -nc --arg p "$1" --arg s "$2" '{hook_event_name: "PreToolUse", session_id: $s, tool_name: "Write", tool_input: {file_path: $p, content: "x"}}'; }
+read_event() { jq -nc --arg p "$1" --arg s "$2" '{hook_event_name: "PreToolUse", session_id: $s, tool_name: "Read", tool_input: {file_path: $p}}'; }
+bash_event() { jq -nc --arg c "$1" --arg s "$2" '{hook_event_name: "PreToolUse", session_id: $s, tool_name: "Bash", tool_input: {command: $c}}'; }
+
+# ---------------------------------------------------------------- a fake GitHub
 
 for who in alice bob; do git config --file "$ROOT/$who/.gitconfig" init.defaultBranch main; done
-for r in acme-founders acme-everyone workspace; do git init -q --bare -b main "$ROOT/remotes/$r.git"; done
+git config --file "$ROOT/admin.gitconfig" init.defaultBranch main
+git config --file "$ROOT/admin.gitconfig" user.name admin
+git config --file "$ROOT/admin.gitconfig" user.email admin@example.com
+admin() { GIT_CONFIG_GLOBAL="$ROOT/admin.gitconfig" git "$@"; }
+jq -n --arg r "$R" '{root: $r, orgs: {"mixim-ai": ["alice", "bob"]}, repos: {}}' > "$GH"
+# repo OWNER/REPO ACCESS [FILE TEXT]...: a repo on the fake GitHub, with these files.
+repo() {
+  local id="$1" access="$2"; shift 2
+  jq --arg id "$id" --argjson a "$access" '.repos[$id] = $a' "$GH" > "$GH.tmp" && mv "$GH.tmp" "$GH"
+  admin init -q --bare "$R/$id.git"
+  admin clone -q "$R/$id.git" "$ROOT/admin/$id" 2>/dev/null
+  while [ $# -gt 0 ]; do mkdir -p "$(dirname "$ROOT/admin/$id/$1")"; printf '%s' "$2" > "$ROOT/admin/$id/$1"; shift 2; done
+  admin -C "$ROOT/admin/$id" add -A && admin -C "$ROOT/admin/$id" commit -qm seed && admin -C "$ROOT/admin/$id" push -q origin HEAD:main
+}
+publish() {  # publish OWNER/REPO MESSAGE: push what the admin changed
+  admin -C "$ROOT/admin/$1" add -A && admin -C "$ROOT/admin/$1" commit -qm "$2"
+  admin -C "$ROOT/admin/$1" pull -q --rebase origin main && admin -C "$ROOT/admin/$1" push -q origin HEAD:main
+}
+BOTH='{"push": ["alice", "bob"]}'
+repo mixim-ai/vault-public "$BOTH" vault.toml 'about      = "Notes everyone at Mixim can see."
+notes_from = ["mixim-ai/marketing", "mixim-ai/mixim-workspace", "mixim-ai/both"]
+'
+repo mixim-ai/vault-private '{"push": ["alice"]}' vault.toml 'about      = "Founders notes: fundraising, hiring, legal."
+notes_from = ["mixim-ai/jorge-ip-theft", "mixim-ai/both"]
+'
+DRIVE="$ROOT/drive"
+mkdir -p "$DRIVE/Team Docs" "$DRIVE/Finance"
+echo "# Plan" > "$DRIVE/Team Docs/Plan.md"
+cp "$REPO/tests/fixtures/sample.xlsx" "$DRIVE/Finance/Runway.xlsx"
+printf 'PK\005\006' > "$DRIVE/old.zip"
+repo mixim-ai/vault-hq '{"push": ["alice"], "read": ["bob"]}' vault.toml "about = \"The text of every file in the Mixim HQ shared drive. Claude only reads it.\"
 
-echo "== alice: init, two team vaults, two folders"
-vl alice init --local >/dev/null
-CONFIG="$ROOT/alice/.config/vaultlines/config.toml"
-check "init lists ~ with the personal vault" grep -q '^\[folders."~"\]' "$CONFIG"
-check "init turns the Basic Memory plugin on" grep -q '^\[plugins.basic-memory\]' "$CONFIG"
-check "  ...with its kind" grep -q '^kind = "basic-memory"$' "$CONFIG"
-check "hooks installed for SessionStart and PreToolUse" \
-  jq -e '[.hooks.SessionStart[].hooks[].command, .hooks.PreToolUse[].hooks[].command] | map(endswith("vl hook")) | all and length == 2' "$ROOT/alice/.claude/settings.json"
-check "  ...and UserPromptSubmit" jq -e '.hooks.UserPromptSubmit[0].hooks[0].command | endswith("vl hook")' "$ROOT/alice/.claude/settings.json"
-check "one basic-memory server, at user level" test "$(user_servers alice)" = "basic-memory"
-check "the server isn't locked to one project" jq -e '.mcpServers["basic-memory"].args == ["basic-memory", "mcp"]' "$ROOT/alice/.claude/.claude.json"
-check "plugin writes to personal at user level" jq -e '.basicMemory.primaryProject == "personal"' "$ROOT/alice/.claude/settings.json"
+[source]
+kind                 = \"gdrive\"
+shared_drive         = \"$DRIVE\"
+shared_drive_name    = \"Mixim HQ\"
+folder               = \"\"
+max_size             = \"50M\"
+google_client_id     = \"1234-abc.apps.googleusercontent.com\"
+google_client_secret = \"GOCSPX-x\"
+"
+repo mixim-ai/vault-notes "$BOTH" README.md 'no vault.toml, so not a vault'
+for code in marketing sheety mixim-workspace both; do repo "mixim-ai/$code" "$BOTH" README.md "# $code"; done
+repo mixim-ai/jorge-ip-theft '{"push": ["alice"]}' README.md '# case'
+repo alice/blog '{"push": ["alice"]}' README.md '# blog'
 
-vl alice vault join "$R/acme-founders.git" >/dev/null
-vl alice vault join "$R/acme-everyone.git" >/dev/null
-vl alice sync >/dev/null
-LEGAL="$(cd "$ROOT/alice" && mkdir -p work/legal && cd work/legal && git init -q && pwd -P)"
-APP="$(cd "$ROOT/alice" && mkdir -p work/app && cd work/app && git init -q && pwd -P)"
-vl alice folder set "$LEGAL" --writes acme-founders --reads acme-everyone >/dev/null
-vl alice folder set "$APP" --writes acme-everyone >/dev/null
+# ---------------------------------------------------------------- a fake Google
+GOOGLE_FILES="$ROOT/google-files.json"
+jq -n '{F1: {name: "Runway.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", data: "PK original"},
+        F403: {name: "Secret.pdf", mimeType: "application/pdf", status: 403}}' > "$GOOGLE_FILES"
+uv run --quiet --project "$REPO" python "$REPO/tests/fake_google.py" "$GOOGLE_FILES" > "$ROOT/google.url" &
+GOOGLE_PID=$!
+for _ in $(seq 50); do [ -s "$ROOT/google.url" ] && break; sleep 0.1; done
+GOOGLE="$(cat "$ROOT/google.url")"
 
-check "legal folder's plugin block writes to acme-founders" jq -e '.basicMemory.primaryProject == "acme-founders"' "$LEGAL/.claude/settings.local.json"
-check "  ...with checkpoints kept local" jq -e '.basicMemory.captureFolder == "sessions" and .basicMemory.captureEvents == false' "$LEGAL/.claude/settings.local.json"
-check "settings.local.json kept out of git" test -z "$(git -C "$LEGAL" status --porcelain)"
-check "no per-folder servers any more" test -z "$(folder_servers alice "$LEGAL")"
-check "runtime.json has the folders" jq -e --arg l "$LEGAL" '.folders[$l] == {"writes": "acme-founders", "reads": ["acme-everyone"]}' <(runtime alice)
-check "runtime.json has who can see each vault" jq -e '.vaults["acme-founders"].audience.logins == ["alice", "carol"] and .me == "alice"' <(runtime alice)
-check "runtime.json maps Basic Memory projects to vaults" jq -e '.plugins["basic-memory"].data.projects["acme-everyone"] == "acme-everyone"' <(runtime alice)
+echo "== alice joins mixim-ai: one command sets everything up"
+vl alice org join mixim-ai >/dev/null
+V="$ROOT/alice/.vaultlines/vaults"
+check "vl init ran first: config.toml is comments only" test -z "$(grep -v '^#' "$ROOT/alice/.vaultlines/config.toml" | grep -v '^$' || true)"
+check "your personal vault, on this computer only" test -z "$(git -C "$V/alice/vault-alice-personal" remote)"
+check "  ...and one for mixim-ai" test -f "$V/mixim-ai/vault-alice-personal/vault.toml"
+check "  ...neither on GitHub" jq -e '.repos | has("alice/vault-alice-personal") or has("mixim-ai/vault-alice-personal") | not' "$GH"
+check "mixim-ai's vaults are cloned" test -d "$V/mixim-ai/vault-public/.git" -a -d "$V/mixim-ai/vault-private/.git" -a -d "$V/mixim-ai/vault-hq/.git"
+check "  ...but not a repo without vault.toml" test ! -e "$V/mixim-ai/vault-notes"
+check "hooks installed" jq -e '[.hooks.SessionStart, .hooks.UserPromptSubmit, .hooks.PreToolUse] | map(.[0].hooks[0].command | endswith("vl hook")) | all' "$ROOT/alice/.claude/settings.json"
+check "one basic-memory server, at user level" test "$(jq -r '.mcpServers | keys | join(",")' "$ROOT/alice/.claude/.claude.json")" = "basic-memory"
+check "Basic Memory knows each vault by its short name" jq -e '.plugins["basic-memory"].data.projects | has("mixim-ai-public") and has("alice-personal") and has("mixim-ai-hq")' <(runtime alice)
+check "the plugin writes to your personal vault by default" jq -e '.basicMemory.primaryProject == "alice-personal"' "$ROOT/alice/.claude/settings.json"
+check "runtime.json knows notes_from" jq -e '.owners["mixim-ai"].notes_from["mixim-ai/marketing"] == "mixim-ai-public"' <(runtime alice)
+check "  ...and the conflict" jq -e '.owners["mixim-ai"].conflicts["mixim-ai/both"] == ["mixim-ai-private", "mixim-ai-public"]' <(runtime alice)
+check "status shows the conflict" grep -q "CONFLICT: mixim-ai/both" <<<"$(vl alice status)"
 
-snapshot() { jq -S '{m: .mcpServers, p: (.projects // {} | map_values(.mcpServers))}' "$ROOT/alice/.claude/.claude.json"; cat "$ROOT/alice/.claude/settings.json" "$LEGAL/.claude/settings.local.json"; }
-BEFORE="$(snapshot)"
-vl alice apply >/dev/null
-check "apply twice changes nothing" test "$BEFORE" = "$(snapshot)"
+echo "== bob joins: GitHub decides what he gets"
+vl bob org join mixim-ai >/dev/null
+VB="$ROOT/bob/.vaultlines/vaults"
+check "bob gets vault-public and vault-hq" test -d "$VB/mixim-ai/vault-public/.git" -a -d "$VB/mixim-ai/vault-hq/.git"
+check "  ...but not vault-private" test ! -e "$VB/mixim-ai/vault-private"
+check "  ...and his own personal vaults" test -f "$VB/mixim-ai/vault-bob-personal/vault.toml" -a -f "$VB/bob/vault-bob-personal/vault.toml"
 
-echo "== the hook guards what the session reads and writes"
-FOUNDERS="$ROOT/alice/Vaults/acme-founders"
-EVERYONE="$ROOT/alice/Vaults/acme-everyone"
-check "session start tells Claude where to save" grep -q 'save notes from this folder to the `acme-founders` vault' \
-  <<<"$(hook alice "$LEGAL" '{"hook_event_name": "SessionStart", "source": "startup"}')"
-check "writing founders after reading everyone is allowed" test "$(hook alice "$LEGAL" "$(read_event "$EVERYONE/a.md")"; hook alice "$LEGAL" "$(write_event "$FOUNDERS/b.md")")" = "$(printf 'allow\nallow')"
-check "writing everyone (a read vault) asks" test "$(hook alice "$LEGAL" "$(write_event "$EVERYONE/b.md")")" = "ask"
-check "the app folder can't use acme-founders" test "$(hook alice "$APP" "$(read_event "$FOUNDERS/b.md" | jq -c '. + {session_id: "app"}')")" = "deny"
-check "Basic Memory calls get the folder's vault" \
-  grep -q '"project": "acme-everyone"' <<<"$(jq -nc --arg cwd "$APP" '{hook_event_name: "PreToolUse", session_id: "bm", cwd: $cwd, tool_name: "mcp__basic-memory__search_notes", tool_input: {query: "x"}}' | CLAUDE_PROJECT_DIR="$APP" vl alice hook)"
-VLCMD='{"hook_event_name": "PreToolUse", "session_id": "guard", "tool_name": "Bash", "tool_input": {"command": "vl folder set . --reads acme-founders"}}'
-hook alice "$APP" '{"hook_event_name": "UserPromptSubmit", "session_id": "guard", "prompt": "tidy the notes"}' >/dev/null
-check "Claude running vl folder set on its own asks" test "$(hook alice "$APP" "$VLCMD")" = "ask"
-hook alice "$APP" '{"hook_event_name": "UserPromptSubmit", "session_id": "guard", "prompt": "run vl folder set for me"}' >/dev/null
-check "  ...but not when you asked for vl" test "$(hook alice "$APP" "$VLCMD")" = "allow"
-check "vl's session records can't be written" test "$(hook alice "$APP" "$(write_event "$ROOT/alice/.local/state/vaultlines/runtime.json")")" = "deny"
-check "vl sessions shows the session's label" grep -q "acme-everyone" <<<"$(vl alice sessions)"
+echo "== code repos, cloned anywhere"
+clone() { as "$1" git clone -q "file://$R/$2.git" "$ROOT/$1/$3" 2>/dev/null; echo "$ROOT/$1/$3"; }
+A_MKT="$(clone alice mixim-ai/marketing code/marketing)"
+B_MKT="$(clone bob mixim-ai/marketing work/elsewhere/mkt)"
+A_JORGE="$(clone alice mixim-ai/jorge-ip-theft code/jorge)"
+A_SHEETY="$(clone alice mixim-ai/sheety code/sheety)"
+B_SHEETY="$(clone bob mixim-ai/sheety sheety)"
+A_BOTH="$(clone alice mixim-ai/both code/both)"
+A_BLOG="$(clone alice alice/blog code/blog)"
+mkdir -p "$ROOT/alice/Desktop" "$ROOT/alice/code/marketing/src"
+check "alice in marketing writes to vault-public" test "$(writes_of alice "$A_MKT" m1)" = mixim-ai-public
+check "  ...from a subfolder too" test "$(writes_of alice "$A_MKT/src" m2)" = mixim-ai-public
+check "bob's clone elsewhere writes there too" test "$(writes_of bob "$B_MKT" b1)" = mixim-ai-public
+check "jorge-ip-theft writes to vault-private" test "$(writes_of alice "$A_JORGE" j1)" = mixim-ai-private
+check "sheety (in no notes_from): alice's mixim-ai personal vault" test "$(writes_of alice "$A_SHEETY" s1)" = mixim-ai-alice-personal
+check "  ...and bob's for bob" test "$(writes_of bob "$B_SHEETY" s2)" = mixim-ai-bob-personal
+check "a repo in two notes_from: the personal vault" test "$(writes_of alice "$A_BOTH" c1)" = mixim-ai-alice-personal
+check "  ...and the briefing says why" grep -q "is in notes_from of two vaults" <<<"$(start alice "$A_BOTH" c2)"
+check "alice's own repo: her personal vault" test "$(writes_of alice "$A_BLOG" bl)" = alice-personal
+check "no repo: her personal vault" test "$(writes_of alice "$ROOT/alice/Desktop" d1)" = alice-personal
+check "marketing reads the other mixim-ai vaults" \
+  test "$(session alice m1 | jq -c '.rules.reads')" = '["mixim-ai-alice-personal","mixim-ai-hq","mixim-ai-private"]'
+check "the briefing names the vault and what it's about" \
+  grep -q 'save notes from this repo to `mixim-ai-public` (Basic Memory project="mixim-ai-public"): Notes everyone at Mixim can see.' <<<"$(start alice "$A_MKT" m3)"
+check "the Basic Memory block is in the repo" jq -e '.basicMemory.primaryProject == "mixim-ai-public"' "$A_MKT/.claude/settings.local.json"
+check "  ...kept out of git" test -z "$(git -C "$A_MKT" status --porcelain)"
 
-echo "== reads that would leak ask, and check says where"
-vl alice folder set "$APP" --writes acme-everyone --reads acme-founders >/dev/null
-check "folder set no longer refuses; check previews the ask" \
-  grep -q "writes to acme-everyone ask after reading acme-founders (bob can't see acme-founders)" <<<"$(vl alice check)"
-hook alice "$APP" '{"hook_event_name": "SessionStart", "source": "startup", "session_id": "leak"}' >/dev/null
-hook alice "$APP" "$(read_event "$FOUNDERS/b.md" | jq -c '. + {session_id: "leak"}')" >/dev/null
-check "reading founders then writing everyone asks" test "$(hook alice "$APP" "$(write_event "$EVERYONE/c.md" | jq -c '. + {session_id: "leak"}')")" = "ask"
-mkdir -p "$APP/.claude" && echo '{"disableAllHooks": true}' > "$APP/.claude/settings.json"
-check "check warns about disableAllHooks" grep -q "sets disableAllHooks" <<<"$(vl alice check 2>&1)"
-check "status warns too" grep -q "sets disableAllHooks" <<<"$(vl alice status 2>&1)"
-rm "$APP/.claude/settings.json"
-vl alice folder set "$APP" --writes acme-everyone >/dev/null
-refuses '"*" is gone' vl alice folder set "*" --writes personal
+echo "== the hook guards what each session reads and writes"
+check "the first session in a new clone asks before a shared write" \
+  test "$(hook alice "$A_MKT" "$(write_event "$V/mixim-ai/vault-public/n.md" m1)")" = ask
+check "  ...because Basic Memory may have briefed it from alice's personal vault" jq -e '.read | index("alice-personal")' <(session alice m1)
+check "later sessions: writing vault-public is allowed" test "$(hook alice "$A_MKT" "$(write_event "$V/mixim-ai/vault-public/n.md" m3)")" = allow
+hook alice "$A_MKT" "$(read_event "$V/mixim-ai/vault-private/plan.md" m3)" >/dev/null
+check "  ...but after reading vault-private, it asks (bob can't see that)" \
+  test "$(hook alice "$A_MKT" "$(write_event "$V/mixim-ai/vault-public/n.md" m3)")" = ask
+check "the Desktop can't read mixim-ai vaults" test "$(hook alice "$ROOT/alice/Desktop" "$(read_event "$V/mixim-ai/vault-public/a.md" d1)")" = deny
+check "mixim-ai repos can't read alice's own vaults" test "$(hook alice "$A_MKT" "$(read_event "$V/alice/vault-alice-personal/a.md" m2)")" = deny
+check "vault-hq is read-only" test "$(hook alice "$A_MKT" "$(write_event "$V/mixim-ai/vault-hq/x.md" m2)")" = deny
+check "vl's records can't be written" test "$(hook alice "$A_MKT" "$(write_event "$ROOT/alice/.vaultlines/state/runtime.json" m2)")" = deny
+check "Google sign-ins can't be read" test "$(hook alice "$A_MKT" "$(read_event "$ROOT/alice/.vaultlines/google/x.json" m2)")" = deny
+hook alice "$A_MKT" '{"hook_event_name": "UserPromptSubmit", "session_id": "m2", "prompt": "tidy the notes"}' >/dev/null
+check "Claude running vl org leave on its own asks" test "$(hook alice "$A_MKT" "$(bash_event "vl org leave mixim-ai" m2)")" = ask
+hook alice "$A_MKT" '{"hook_event_name": "UserPromptSubmit", "session_id": "m2", "prompt": "use vl to leave"}' >/dev/null
+check "  ...but not when you asked for vl" test "$(hook alice "$A_MKT" "$(bash_event "vl org leave mixim-ai" m2)")" = allow
+check "vl sessions shows the session's vault" grep -q "mixim-ai-public" <<<"$(vl alice sessions)"
+check "vl check previews where writes ask" grep -q "writes to mixim-ai-public ask after reading mixim-ai-private (bob can't see" <<<"$(vl alice check)"
 
-echo "== vaultlines 0.2 leftovers are removed"
-as alice claude mcp add -s user vl-personal -- uvx basic-memory mcp --project personal >/dev/null
-(cd "$LEGAL" && as alice claude mcp add -s local vl-acme-founders -- uvx basic-memory mcp --project acme-founders >/dev/null)
-jq '.permissions = {ask: ["mcp__vl-acme-everyone__write_note"], deny: ["mcp__vl-personal", "Bash(rm:*)"]} | .basicMemory.secondaryProjects = ["acme-everyone"]' \
-  "$LEGAL/.claude/settings.local.json" > "$LEGAL/tmp.json" && mv "$LEGAL/tmp.json" "$LEGAL/.claude/settings.local.json"
-vl alice apply >/dev/null
-check "vl-* user servers removed" test "$(user_servers alice)" = "basic-memory"
-check "vl-* folder servers removed" test -z "$(folder_servers alice "$LEGAL")"
-check "mcp__vl-* rules removed, others kept" jq -e '.permissions == {deny: ["Bash(rm:*)"]}' "$LEGAL/.claude/settings.local.json"
-check "old secondaryProjects replaced" jq -e '.basicMemory.secondaryProjects == null' "$LEGAL/.claude/settings.local.json"
-
-echo "== bob: joins the everyone vault; notes flow both ways"
-vl bob init --local >/dev/null
-vl bob vault join "$R/acme-everyone.git" >/dev/null
-bmtool bob write-note --title "From bob" --folder notes --content "- [fact] hello from bob" --project acme-everyone
-bmtool bob write-note --title "Bob checkpoint" --folder sessions --content "- [x] private" --project acme-everyone
+echo "== notes flow both ways"
+bmtool bob write-note --title "From bob" --folder notes --content "- [fact] hello from bob" --project mixim-ai-public
+bmtool bob write-note --title "Bob checkpoint" --folder sessions --content "- [x] private" --project mixim-ai-public
 vl bob sync >/dev/null
 vl alice sync >/dev/null
-check "alice got bob's note" test -f "$ROOT/alice/Vaults/acme-everyone/notes/From bob.md"
-check "bob's sessions/ stayed on bob's computer" test ! -e "$ROOT/alice/Vaults/acme-everyone/sessions/Bob checkpoint.md"
-
-printf '\n- [fact] alice line\n' >> "$ROOT/alice/Vaults/acme-everyone/notes/From bob.md"
-printf '\n- [fact] bob line\n' >> "$ROOT/bob/Vaults/acme-everyone/notes/From bob.md"
+check "alice got bob's note" test -f "$V/mixim-ai/vault-public/notes/From bob.md"
+check "bob's sessions/ stayed on bob's computer" test ! -e "$V/mixim-ai/vault-public/sessions/Bob checkpoint.md"
+printf '\n- [fact] alice line\n' >> "$V/mixim-ai/vault-public/notes/From bob.md"
+printf '\n- [fact] bob line\n' >> "$VB/mixim-ai/vault-public/notes/From bob.md"
 vl alice sync >/dev/null && vl bob sync >/dev/null && vl alice sync >/dev/null
-check "edits to the same note from both keep both lines" \
-  grep -q "bob line" "$ROOT/alice/Vaults/acme-everyone/notes/From bob.md"
-check "  ...and alice's line too" grep -q "alice line" "$ROOT/alice/Vaults/acme-everyone/notes/From bob.md"
-check "bob never sees the founders vault" test ! -e "$ROOT/bob/Vaults/acme-founders"
+check "edits to the same note from both keep both lines" grep -q "bob line" "$V/mixim-ai/vault-public/notes/From bob.md"
+check "  ...and alice's line too" grep -q "alice line" "$V/mixim-ai/vault-public/notes/From bob.md"
 
-echo "== auto_pull keeps a workspace repo up to date"
-SEED="$ROOT/seed"
-git clone -q "$R/workspace.git" "$SEED" 2>/dev/null
-(cd "$SEED" && echo "# Team" > CLAUDE.md && git add -A && git -c user.name=t -c user.email=t@t commit -qm one && git push -q origin HEAD:main)
-git clone -q "$R/workspace.git" "$ROOT/alice/work/ws"
-WS="$(cd "$ROOT/alice/work/ws" && pwd -P)"
-vl alice folder set "$WS" --writes acme-everyone --auto-pull >/dev/null
-check "config has auto_pull" grep -q "auto_pull = true" "$CONFIG"
-(cd "$SEED" && echo "skill" > skill.md && git add -A && git -c user.name=t -c user.email=t@t commit -qm two && git push -q origin HEAD:main)
+echo "== a vault.toml change reaches everyone on the next sync"
+printf 'about      = "Notes everyone at Mixim can see."\nnotes_from = ["mixim-ai/marketing", "mixim-ai/mixim-workspace", "mixim-ai/sheety"]\n' \
+  > "$ROOT/admin/mixim-ai/vault-public/vault.toml"
+publish mixim-ai/vault-public "sheety too"
 vl alice sync >/dev/null
-check "sync pulled the new commit" test -f "$WS/skill.md"
-check "  ...and the plugin block stays out of that repo's git" test -z "$(git -C "$WS" status --porcelain)"
-mkdir -p "$ROOT/alice/plain"
-refuses "auto_pull needs a git repo" vl alice folder set "$ROOT/alice/plain" --writes personal --auto-pull
+check "sheety's notes go to vault-public now" test "$(writes_of alice "$A_SHEETY" s3)" = mixim-ai-public
+check "  ...and the conflict is gone" jq -e '.owners["mixim-ai"].conflicts == {}' <(runtime alice)
+check "  ...and sheety's Basic Memory block followed" jq -e '.basicMemory.primaryProject == "mixim-ai-public"' "$A_SHEETY/.claude/settings.local.json"
 
-echo "== a change on GitHub is caught by the daily check"
-AUDIENCES="$(jq -c --arg r "$R" '.[$r + "/acme-founders.git"] += ["dan"]' <<<"$AUDIENCES")"
-STATE="$ROOT/alice/.config/vaultlines/state.json"
-vl alice sync --background >/dev/null 2>&1
-check "no re-check within check_interval" jq -e '.vaults["acme-founders"].audience.logins | index("dan") | not' <(runtime alice)
-jq '.checked_at = 0' "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"   # a day passes
-mkdir -p "$APP/.claude" && echo '{"disableAllHooks": true}' > "$APP/.claude/settings.local.json"
-OUT="$(vl alice sync --background 2>&1)"
-check "the daily check updates who can see each vault" jq -e '.vaults["acme-founders"].audience.logins | index("dan")' <(runtime alice)
-check "  ...and reports new disableAllHooks files" grep -q "check: .*sets disableAllHooks" <<<"$OUT"
-jq '.checked_at = 0' "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
-OUT="$(vl alice sync --background 2>&1)"
-check "  ...only once" test -z "$(grep 'check:' <<<"$OUT" || true)"
-rm "$APP/.claude/settings.local.json"
-hook alice "$LEGAL" '{"hook_event_name": "SessionStart", "source": "startup", "session_id": "dan"}' >/dev/null
-hook alice "$LEGAL" "$(read_event "$EVERYONE/a.md" | jq -c '. + {session_id: "dan"}')" >/dev/null
-OUT="$(write_event "$FOUNDERS/c.md" | jq -c --arg cwd "$LEGAL" '. + {session_id: "dan", cwd: $cwd}' | CLAUDE_PROJECT_DIR="$LEGAL" vl alice hook)"
-check "now writing founders after reading everyone asks" jq -e '.hookSpecificOutput.permissionDecision == "ask"' <<<"$OUT"
-check "  ...naming dan" jq -e '.hookSpecificOutput.permissionDecisionReason | contains("dan would see this in acme-founders")' <<<"$OUT"
+echo "== your changes in config.toml"
+CONFIG="$ROOT/alice/.vaultlines/config.toml"
+vl alice vault create local/recipes --about "Food." >/dev/null
+check "a local vault is listed in config.toml" grep -q '^\[vaults."local/recipes"\]' "$CONFIG"
+mkdir -p "$ROOT/alice/writing"
+cat >> "$CONFIG" <<'EOF'
 
-echo "== old sessions are cleaned up"
-SESSIONS="$ROOT/alice/.local/state/vaultlines/sessions"
-touch -t 202001010000 "$SESSIONS/e2e-session.json"
+[repos."mixim-ai/jorge-ip-theft"]
+writes = "mixim-ai/vault-public"
+reads  = ["local/recipes"]
+
+[repos."mixim-ai/*"]
+reads = ["alice/vault-alice-personal"]
+
+[folders."~/writing"]
+writes = "local/recipes"
+EOF
+vl alice apply >/dev/null
+check "a [repos] entry wins over notes_from" test "$(writes_of alice "$A_JORGE" j2)" = mixim-ai-public
+check "  ...and adds its reads" jq -e '.rules.reads | index("local-recipes")' <(session alice j2)
+check "an owner-wide entry lets every mixim-ai repo read alice's own vault" \
+  test "$(hook alice "$A_MKT" "$(read_event "$V/alice/vault-alice-personal/a.md" m4)")" = allow
+check "a [folders] entry counts outside joined repos" test "$(writes_of alice "$ROOT/alice/writing" w1)" = local-recipes
+
+echo "== auto_pull keeps a repo up to date, wherever it's cloned"
+A_WS="$(clone alice mixim-ai/mixim-workspace work/ws)"
+printf '\n[repos."mixim-ai/mixim-workspace"]\nauto_pull = true\n' >> "$CONFIG"
+vl alice apply >/dev/null
+start alice "$A_WS" ws >/dev/null   # Claude ran there, so vl knows the clone
+printf 'skill\n' > "$ROOT/admin/mixim-ai/mixim-workspace/skill.md"
+publish mixim-ai/mixim-workspace "a skill"
 vl alice sync >/dev/null
-check "sync deletes session files older than 30 days" test ! -e "$SESSIONS/e2e-session.json"
-check "  ...and keeps new ones" test -e "$SESSIONS/leak.json"
+check "sync pulled the new commit" test -f "$A_WS/skill.md"
+check "  ...and the plugin block stays out of that repo's git" test -z "$(git -C "$A_WS" status --porcelain)"
 
-echo "== a Drive source fills a vault with notes (a local folder stands in for Drive)"
+echo "== a vault filled from Google Drive"
 if command -v rclone >/dev/null && command -v uv >/dev/null; then
-  DRIVE="$ROOT/drive"
-  mkdir -p "$DRIVE/Team Docs" "$DRIVE/Finance"
-  echo "# Plan" > "$DRIVE/Team Docs/Plan.md"
-  cp "$REPO/tests/fixtures/sample.xlsx" "$DRIVE/Finance/Runway.xlsx"
-  printf 'PK\005\006' > "$DRIVE/old.zip"
-  vl alice source add drive --drive --remote "$DRIVE" --local >/dev/null
-  DV="$ROOT/alice/Vaults/drive"
-  check "source add writes the plugin table" grep -q '^\[plugins.drive\]' "$CONFIG"
-  check "  ...and fills the vault with notes" grep -q "Comptroller" "$DV/Finance/Runway.xlsx.md"
-  check "  ...with frontmatter that points to the original" \
-    grep -qx 'fetch: "vl fetch drive \\"Finance/Runway.xlsx\\""' "$DV/Finance/Runway.xlsx.md"
-  check "  ...and a note without text for what can't be converted" grep -qx 'text: "not convertible"' "$DV/old.zip.md"
-  check "  ...committed as Update from drive" grep -qx "Update from drive" <<<"$(git -C "$DV" log --format=%s)"
-  check "  ...with no originals in the vault" test -z "$(cd "$DV" && git ls-files | grep -v '\.md$' | grep -v '^\.git' | grep -vx '.vl-source')"
-  check "  ...and the computer that fills it" jq -e --arg h "$(hostname -s)" '.source == "drive" and .host == $h' "$DV/.vl-source"
-  N="$(git -C "$DV" rev-list --count HEAD)"
-  vl alice sync >/dev/null
-  vl alice sync drive >/dev/null
-  check "a second run makes no commit" test "$(git -C "$DV" rev-list --count HEAD)" = "$N"
-  rm "$DRIVE/old.zip"
-  mv "$DRIVE/Team Docs/Plan.md" "$DRIVE/Team Docs/Plan Q4.md"
-  vl alice sync drive >/dev/null
-  check "deletes show in the notes" test ! -e "$DV/old.zip.md"
-  check "  ...and so do renames" test -f "$DV/Team Docs/Plan Q4.md" -a ! -e "$DV/Team Docs/Plan.md"
-  check "  ...in one more commit" test "$(git -C "$DV" rev-list --count HEAD)" = "$((N + 1))"
-  check "  ...and the vault is synced" test -z "$(git -C "$DV" status --porcelain)"
-
-  FETCHED="$(vl alice fetch drive "Finance/Runway.xlsx")"
-  check "vl fetch copies one original" cmp "$DRIVE/Finance/Runway.xlsx" "$FETCHED"
-  check "  ...into the fetch folder" test "$FETCHED" = "$ROOT/alice/.cache/vaultlines/fetch/drive/Finance/Runway.xlsx"
-  refuses "  ...but not a path outside the remote" vl alice fetch drive "../etc/passwd"
-  refuses "  ...or for a vault no source fills" vl alice fetch personal "x.pdf"
-
-  vl alice folder set "$APP" --writes acme-everyone --reads drive >/dev/null
-  FETCH="$(jq -nc '{hook_event_name: "PreToolUse", session_id: "fetch", tool_name: "Bash", tool_input: {command: "vl fetch drive \"Finance/Runway.xlsx\""}}')"
-  check "the briefing says how to fetch originals" grep -q 'run `vl fetch drive' \
-    <<<"$(hook alice "$APP" '{"hook_event_name": "SessionStart", "source": "startup", "session_id": "fetch"}')"
-  check "the hook lets vl fetch run where the vault is read" test "$(hook alice "$APP" "$FETCH")" = "allow"
-  check "  ...counting it as a read" jq -e '.read | index("drive")' "$ROOT/alice/.local/state/vaultlines/sessions/fetch.json"
-  check "  ...and denies it where the vault isn't used" test "$(hook alice "$LEGAL" "$(jq -c '.session_id = "legal"' <<<"$FETCH")")" = "deny"
-  check "reading a fetched original is a read of the vault" test "$(hook alice "$APP" "$(read_event "$FETCHED" | jq -c '.session_id = "fetch"')")" = "allow"
-  check "  ...and writing it is denied" test "$(hook alice "$APP" "$(write_event "$FETCHED" | jq -c '.session_id = "fetch"')")" = "deny"
-  check "the rclone config can't be read" \
-    test "$(hook alice "$APP" "$(read_event "$ROOT/alice/.config/rclone/rclone.conf" | jq -c '.session_id = "fetch"')")" = "deny"
-  check "status lists the source and its computer" \
-    grep -Eq "^  drive +drive +drive +60 min +$(hostname -s) +.*(new|no changes)" <<<"$(vl alice status)"
-  refuses "a source's vault can't be a folder's writes" vl alice folder set "$APP" --writes drive
-  vl alice folder set "$APP" --writes acme-everyone >/dev/null
-  refuses "can't remove a vault a source fills" vl alice vault remove drive
-  check "doctor checks the source" grep -q "ok    rclone remote $DRIVE can only read Drive" <<<"$(vl alice doctor)"
-  vl alice vault create broken --local >/dev/null
-  printf '\n[plugins.broken]\nkind = "drive"\nvault = "broken"\nremote = "%s"\n' "$ROOT/no-such-folder" >> "$CONFIG"
-  refuses "a failing source fails sync" vl alice sync broken
-  check "  ...and status says so" grep -q "FAILED" <<<"$(vl alice status)"
-  sed '/^\[plugins.broken\]/,/^$/d' "$CONFIG" > "$CONFIG.tmp" && mv "$CONFIG.tmp" "$CONFIG"
+  ACTION="$ROOT/action"
+  admin clone -q "$R/mixim-ai/vault-hq.git" "$ACTION"
+  (cd "$ACTION" && GITHUB_REPOSITORY=mixim-ai/vault-hq vl alice gdrive run >/dev/null)
+  check "the Action wrote notes and pushed them" test "$(git --git-dir "$R/mixim-ai/vault-hq.git" log -1 --format=%s)" = "Update from Google Drive"
+  N="$(git --git-dir "$R/mixim-ai/vault-hq.git" rev-list --count HEAD)"
+  (cd "$ACTION" && GITHUB_REPOSITORY=mixim-ai/vault-hq vl alice gdrive run >/dev/null)
+  check "  ...and a second run pushes nothing" test "$(git --git-dir "$R/mixim-ai/vault-hq.git" rev-list --count HEAD)" = "$N"
+  vl alice sync >/dev/null && vl bob sync >/dev/null
+  HQ="$VB/mixim-ai/vault-hq"
+  check "bob got the notes" grep -q "Comptroller" "$HQ/Finance/Runway.xlsx.md"
+  check "  ...pointing to the original" grep -qx 'fetch: "vl gdrive fetch mixim-ai/vault-hq \\"Finance/Runway.xlsx\\""' "$HQ/Finance/Runway.xlsx.md"
+  check "  ...and a note without text for what can't be converted" grep -qx 'text: "not convertible"' "$HQ/old.zip.md"
+  echo "edited" >> "$HQ/old.zip.md"
+  check "bob's sync takes the vault as GitHub has it" grep -q "local changes were moved to the branch" <<<"$(vl bob sync)"
+  check "  ...keeping his change on a branch" test -n "$(git -C "$HQ" branch --list 'local-changes-*')"
+  check "status shows when Drive last filled it" grep -q "filled from Google Drive, updated" <<<"$(vl bob status)"
 else
   echo "  skip  rclone or uv isn't installed"
+  vl alice sync >/dev/null && vl bob sync >/dev/null
 fi
+# The Action keeps Drive's file IDs; a local folder has none, so add two notes as it would.
+note() { printf -- '---\ntitle: "%s"\ntype: "drive-file"\nsource: "gdrive"\nid: "%s"\npath: "%s"\nfetch: "vl gdrive fetch mixim-ai/vault-hq \\"%s\\""\n---\n\ntext\n' "$1" "$2" "$3" "$3"; }
+mkdir -p "$ROOT/admin/mixim-ai/vault-hq/Real" && note Runway F1 "Real/Runway.xlsx" > "$ROOT/admin/mixim-ai/vault-hq/Real/Runway.xlsx.md"
+note Secret F403 "Real/Secret.pdf" > "$ROOT/admin/mixim-ai/vault-hq/Real/Secret.pdf.md"
+publish mixim-ai/vault-hq "Update from Google Drive"
+vl bob sync >/dev/null
+FETCHED="$(vl bob gdrive fetch mixim-ai/vault-hq "Real/Runway.xlsx" 2>/dev/null)"
+check "vl gdrive fetch signs in and gets one original" test "$(cat "$FETCHED")" = "PK original"
+check "  ...into the fetch folder, read-only" test "$FETCHED" = "$ROOT/bob/.vaultlines/cache/fetch/mixim-ai/vault-hq/Real/Runway.xlsx" -a ! -w "$FETCHED"
+check "  ...keeping the sign-in for vl only" test "$(stat -f %Lp "$ROOT/bob/.vaultlines/google/1234-abc.json")" = 600
+check "  ...and says so when Drive won't share a file" grep -q "Ask for access to Mixim HQ" <<<"$(vl bob gdrive fetch mixim-ai/vault-hq "Real/Secret.pdf" 2>&1 || true)"
+start bob "$B_MKT" f1 >/dev/null
+check "the hook lets a session fetch from a vault it reads" test "$(hook bob "$B_MKT" "$(bash_event 'vl gdrive fetch mixim-ai/vault-hq "Real/Runway.xlsx"' f1)")" = allow
+check "  ...counting it as a read" jq -e '.read | index("mixim-ai-hq")' <(session bob f1)
+check "  ...so a write to vault-public asks (bob can't list who reads vault-hq)" \
+  test "$(hook bob "$B_MKT" "$(write_event "$VB/mixim-ai/vault-public/x.md" f1)")" = ask
+check "reading a fetched original is a read" test "$(hook bob "$B_MKT" "$(read_event "$FETCHED" f1)")" = allow
+check "  ...and writing it is denied" test "$(hook bob "$B_MKT" "$(write_event "$FETCHED" f1)")" = deny
+check "the Desktop can't fetch" test "$(hook bob "$ROOT/bob" "$(bash_event 'vl gdrive fetch mixim-ai/vault-hq x' d2)")" = deny
 
-echo "== adopt, unset, remove, uninstall"
-mkdir -p "$ROOT/alice/old-notes" && echo "# Old" > "$ROOT/alice/old-notes/old.md"
-vl alice vault adopt "$ROOT/alice/old-notes" >/dev/null
-check "adopted folder became a git repo" test -d "$ROOT/alice/old-notes/.git"
-vl alice folder unset "$APP" >/dev/null
-check "unset removed the folder's plugin block" jq -e '.basicMemory == null' "$APP/.claude/settings.local.json"
-check "  ...and its runtime entry" jq -e --arg a "$APP" '.folders[$a] == null' <(runtime alice)
-refuses "can't remove a vault a folder still uses" vl alice vault remove acme-founders
-vl bob vault remove acme-everyone >/dev/null
-check "remove kept the files" test -f "$ROOT/bob/Vaults/acme-everyone/notes/From bob.md"
+echo "== publishing a personal vault"
+vl bob vault publish mixim-ai/vault-bob-personal >/dev/null
+check "it's a private repo only bob can access" jq -e '.repos["mixim-ai/vault-bob-personal"] == {"push": ["bob"]}' "$GH"
+check "  ...and bob's clone syncs to it" test -n "$(git -C "$VB/mixim-ai/vault-bob-personal" remote get-url origin)"
+
+echo "== GitHub changes are caught by the daily check"
+jq '.repos["mixim-ai/vault-public"].push += ["dan"] | .repos["mixim-ai/vault-private"].push = ["carol"]' "$GH" > "$GH.tmp" && mv "$GH.tmp" "$GH"
+STATE="$ROOT/alice/.vaultlines/state/state.json"
+vl alice sync --background >/dev/null 2>&1
+check "no re-check within check_interval" jq -e '.vaults["mixim-ai-public"].audience.logins | index("dan") | not' <(runtime alice)
+jq '.checked_at = 0' "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"   # a day passes
+OUT="$(vl alice sync --background 2>&1)"
+check "the daily check updates who can see each vault" jq -e '.vaults["mixim-ai-public"].audience.logins | index("dan")' <(runtime alice)
+check "  ...and stops syncing a vault alice lost" grep -q "mixim-ai/vault-private: no access on GitHub any more" <<<"$OUT"
+check "  ...keeping its files" test -f "$V/mixim-ai/vault-private/vault.toml"
+check "  ...and status says so" grep -q "no access on GitHub any more" <<<"$(vl alice status)"
+start alice "$A_MKT" dan >/dev/null
+hook alice "$A_MKT" "$(read_event "$V/mixim-ai/vault-alice-personal/a.md" dan)" >/dev/null
+OUT="$(write_event "$V/mixim-ai/vault-public/c.md" dan | jq -c --arg cwd "$A_MKT" '. + {cwd: $cwd}' | CLAUDE_PROJECT_DIR="$A_MKT" vl alice hook)"
+check "writing vault-public after a private read names dan" jq -e '.hookSpecificOutput.permissionDecisionReason | contains("dan")' <<<"$OUT"
+
+echo "== old sessions are cleaned up"
+SESSIONS="$ROOT/alice/.vaultlines/state/sessions"
+touch -t 202001010000 "$SESSIONS/m1.json"
+vl alice sync >/dev/null
+check "sync deletes session files older than 30 days" test ! -e "$SESSIONS/m1.json"
+check "  ...and keeps new ones" test -e "$SESSIONS/dan.json"
+
+echo "== leave, doctor, uninstall"
+vl bob org leave mixim-ai >/dev/null
+check "leaving keeps the files" test -f "$ROOT/bob/.vaultlines/left/mixim-ai/vault-public/notes/From bob.md"
+check "  ...and stops using them" jq -e '.owners | has("mixim-ai") | not' <(runtime bob)
 check "doctor passes for alice" vl alice doctor
-sed '/^\[plugins.basic-memory\]/,/^$/d' "$CONFIG" > "$CONFIG.tmp" && mv "$CONFIG.tmp" "$CONFIG"
-vl alice apply >/dev/null
-check "turning the plugin off removes its folder blocks" jq -e '.basicMemory == null' "$LEGAL/.claude/settings.local.json"
-check "  ...and the user-level one" jq -e '.basicMemory == null' "$ROOT/alice/.claude/settings.json"
-check "  ...and its runtime entry" jq -e '.plugins["basic-memory"] == null' <(runtime alice)
-check "  ...and doctor still passes" vl alice doctor
 vl alice uninstall >/dev/null
 check "uninstall removed the hooks" jq -e '.hooks == null' "$ROOT/alice/.claude/settings.json"
 refuses "  ...so doctor fails" vl alice doctor

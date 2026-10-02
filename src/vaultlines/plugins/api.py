@@ -17,12 +17,12 @@ class Access:
     updated_input: dict | None = None
 
 
-def here(folder: dict | None) -> str:
-    """The vaults a folder entry (from runtime.json) uses, for messages."""
-    if not folder:
-        return "No vaults are set up for this folder."
-    reads = folder.get("reads") or []
-    return f"This folder uses {', '.join([folder['writes'], *reads])}."
+def here(rules: dict | None) -> str:
+    """The vaults a session uses (its rules: {"writes", "reads"}), for messages."""
+    used = [v for v in [(rules or {}).get("writes"), *((rules or {}).get("reads") or [])] if v]
+    if not used:
+        return "No vaults are set up here."
+    return f"This session uses {', '.join(used)}."
 
 
 def mentions(command: str, path: str) -> bool:
