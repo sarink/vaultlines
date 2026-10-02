@@ -150,15 +150,25 @@ def test_create_asks_for_what_is_missing(fake_github, computer, google_fake, ans
     fake_github.org("mixim-ai", ["alice"])
     vl("org", "join", "mixim-ai")
     given, asked = answers
-    given += [CLIENT, "GOCSPX-x", "1"]  # the first shared drive the bot can open
-    assert vl("vault", "create", "mixim-ai/vault-hq", "--source", "gdrive") == 0
+    given += ["vault-hq", "mixim-ai/vault-hq", CLIENT, "GOCSPX-x", "1"]  # a bad name first; then the first drive
+    assert vl("vault", "create", "--source", "gdrive") == 0
     out = capsys.readouterr().out
     assert "console.cloud.google.com/auth/clients" in out  # the steps, before the questions
-    assert "google_client_id" in asked[0] and "google_client_secret" in asked[1] and "shared_drive" in asked[2]
+    assert "OWNER/vault-NAME" in asked[0] and "OWNER/vault-NAME" in asked[1] and "OWNER/vault-NAME" in out
+    assert "google_client_id" in asked[2] and "google_client_secret" in asked[3] and "shared_drive" in asked[4]
     assert "1. Mixim HQ" in out and "2. Other" in out
     info = vaults.read("mixim-ai/vault-hq", vaults_dir() / "mixim-ai" / "vault-hq").info
     assert info.source["shared_drive"] == "Mixim HQ"
     assert (info.source["google_client_id"], info.source["google_client_secret"]) == (CLIENT, "GOCSPX-x")
+
+
+@pytest.mark.parametrize("args", [["--source", "gdrive"], []])
+def test_create_without_a_vault_or_a_terminal_says_to_give_one(fake_github, computer, monkeypatch, capsys, args):
+    from vaultlines import util
+
+    monkeypatch.setattr(util, "interactive", lambda: False)
+    assert vl("vault", "create", *args) == 1
+    assert "Give the vault to create: OWNER/vault-NAME" in capsys.readouterr().err
 
 
 def test_create_asks_again_for_a_bad_answer(fake_github, computer, google_fake, answers, capsys):

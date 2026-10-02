@@ -293,23 +293,37 @@ def _kind(name: str):
     return plugins.SOURCES[name]
 
 
-def cmd_vault_create(args) -> None:
-    vault_id = args.vault.strip().lower()
+def _new_vault_problem(cfg: Config, text: str) -> str | None:
+    """Why `text` can't be the ID of a new vault, or None."""
+    vault_id = text.strip().lower()
     if not vlt.valid_id(vault_id):
-        raise VlError("Give OWNER/vault-NAME, like mixim-ai/vault-design.")
+        return "Give OWNER/vault-NAME, like mixim-ai/vault-design."
     owner, repo = vault_id.split("/", 1)
     if not repo.startswith(vlt.PREFIX):
-        raise VlError(f"Vault repos start with {vlt.PREFIX}, like {owner}/{vlt.PREFIX}{repo}.")
+        return f"Vault repos start with {vlt.PREFIX}, like {owner}/{vlt.PREFIX}{repo}."
+    if owner not in cfg.owners:
+        return f"You haven't joined {owner}. Run `vl org join {owner}` first."
+    if vault_id in cfg.vaults or vlt.path_of(vault_id).exists():
+        return f"{vault_id} is already on this computer."
+    return None
+
+
+def cmd_vault_create(args) -> None:
     notes_from = []
     for r in args.notes_from or []:
         if not vlt.REPO_ID_RE.match(r.strip()):
             raise VlError(f"--notes_from: {r!r} isn't a repo, written OWNER/REPO.")
         notes_from.append(r.strip().lower())
     cfg = config.load()
-    if owner not in cfg.owners:
-        raise VlError(f"You haven't joined {owner}. Run `vl org join {owner}` first.")
-    if vault_id in cfg.vaults or vlt.path_of(vault_id).exists():
-        raise VlError(f"{vault_id} is already on this computer.")
+    if args.vault is None:
+        if not util.interactive():
+            raise VlError("Give the vault to create: OWNER/vault-NAME, like mixim-ai/vault-hq.")
+        args.vault = util.ask("vault to create (OWNER/vault-NAME, like mixim-ai/vault-hq)",
+                              check=lambda text: _new_vault_problem(cfg, text))
+    problem = _new_vault_problem(cfg, args.vault)
+    if problem:
+        raise VlError(problem)
+    vault_id = args.vault.strip().lower()
     if args.source:
         return _create_with_source(args, vault_id, notes_from)
     _new_vault(vault_id, args.about or "", notes_from)

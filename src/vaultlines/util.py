@@ -120,9 +120,9 @@ def interactive() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def ask(question: str, choices: list[str] | None = None) -> str:
+def ask(question: str, choices: list[str] | None = None, check=None) -> str:
     """Ask until the answer isn't empty. With `choices`, the answer is one of them,
-    given by its number or its text."""
+    given by its number or its text. With `check`, until check(answer) gives no problem."""
     if choices:
         for i, choice in enumerate(choices, 1):
             print(f"  {i}. {choice}")
@@ -138,7 +138,10 @@ def ask(question: str, choices: list[str] | None = None) -> str:
                 return answer
             print(f"Give a number from 1 to {len(choices)}.")
         elif answer:
-            return answer
+            problem = check(answer) if check else None
+            if not problem:
+                return answer
+            print(problem)
 
 
 def warn(message: str) -> None:
