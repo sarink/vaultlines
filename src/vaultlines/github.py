@@ -88,6 +88,15 @@ def logged_in() -> bool:
     return run(["gh", "auth", "status"], check=False).returncode == 0
 
 
+def scopes() -> set[str]:
+    """What your gh sign-in may do, like {"repo", "workflow"}."""
+    if _fake_path():
+        return {"repo", "workflow"}
+    out = run(["gh", "auth", "status", "--hostname", "github.com"], check=False)
+    m = re.search(r"Token scopes:\s*(.*)", out.stdout + out.stderr)
+    return {s.strip(" '\"") for s in m.group(1).split(",")} if m else set()
+
+
 def login() -> str:
     """Your GitHub login in lowercase, or "" if unknown."""
     if _fake_path():

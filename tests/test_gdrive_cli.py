@@ -271,3 +271,15 @@ def test_run_refuses_a_token_that_can_change_drive(fake_github, computer, google
     assert vl("gdrive", "run") == 1
     err = capsys.readouterr().err
     assert "can change Google Drive" in err and "SECRET" not in err
+
+
+def test_add_checks_github_can_take_a_workflow_first(fake_github, computer, google_fake, monkeypatch, capsys):
+    from vaultlines import github
+
+    fake_github.org("mixim-ai", ["alice"])
+    vl("org", "join", "mixim-ai")
+    monkeypatch.setattr(github, "scopes", lambda: {"repo", "admin:org"})
+    assert vl("gdrive", "add", "mixim-ai/vault-hq", "--shared-drive", "Mixim HQ", "--client-id", CLIENT,
+              "--client-secret", "s") == 1
+    assert "gh auth refresh -s workflow" in capsys.readouterr().err
+    assert not any(r.startswith("/auth") for r in google_fake.requests)  # stopped before the Google sign-in
