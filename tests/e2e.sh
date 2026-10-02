@@ -94,14 +94,13 @@ repo mixim-ai/vault-hq '{"push": ["alice"], "read": ["bob"]}' vault.toml "about 
 [source]
 kind                 = \"gdrive\"
 shared_drive         = \"$DRIVE\"
-shared_drive_name    = \"Mixim HQ\"
 folder               = \"\"
 max_size             = \"50M\"
 google_client_id     = \"1234-abc.apps.googleusercontent.com\"
 google_client_secret = \"GOCSPX-x\"
 "
 repo mixim-ai/vault-notes "$BOTH" README.md 'no vault.toml, so not a vault'
-for code in marketing sheety mixim-workspace both; do repo "mixim-ai/$code" "$BOTH" README.md "# $code"; done
+for code in marketing sheety mixim-workspace both studio; do repo "mixim-ai/$code" "$BOTH" README.md "# $code"; done
 repo mixim-ai/jorge-ip-theft '{"push": ["alice"]}' README.md '# case'
 repo alice/blog '{"push": ["alice"]}' README.md '# blog'
 
@@ -177,13 +176,13 @@ check "the Desktop can't read mixim-ai vaults" test "$(hook alice "$ROOT/alice/D
 check "mixim-ai repos can't read alice's own vaults" test "$(hook alice "$A_MKT" "$(read_event "$V/alice/vault-alice-personal/a.md" m2)")" = deny
 check "vault-hq is read-only" test "$(hook alice "$A_MKT" "$(write_event "$V/mixim-ai/vault-hq/x.md" m2)")" = deny
 check "vl's records can't be written" test "$(hook alice "$A_MKT" "$(write_event "$ROOT/alice/.vaultlines/state/runtime.json" m2)")" = deny
-check "Google sign-ins can't be read" test "$(hook alice "$A_MKT" "$(read_event "$ROOT/alice/.vaultlines/google/x.json" m2)")" = deny
+check "Google logins can't be read" test "$(hook alice "$A_MKT" "$(read_event "$ROOT/alice/.vaultlines/google/x.json" m2)")" = deny
 hook alice "$A_MKT" '{"hook_event_name": "UserPromptSubmit", "session_id": "m2", "prompt": "tidy the notes"}' >/dev/null
 check "Claude running vl org leave on its own asks" test "$(hook alice "$A_MKT" "$(bash_event "vl org leave mixim-ai" m2)")" = ask
 hook alice "$A_MKT" '{"hook_event_name": "UserPromptSubmit", "session_id": "m2", "prompt": "use vl to leave"}' >/dev/null
 check "  ...but not when you asked for vl" test "$(hook alice "$A_MKT" "$(bash_event "vl org leave mixim-ai" m2)")" = allow
 check "vl sessions shows the session's vault" grep -q "mixim-ai-public" <<<"$(vl alice sessions)"
-check "vl check previews where writes ask" grep -q "writes to mixim-ai-public ask after reading mixim-ai-private (bob can't see" <<<"$(vl alice check)"
+check "vl status previews where writes ask" grep -q "writes to mixim-ai-public ask after reading mixim-ai-private (bob can't see" <<<"$(vl alice sync --check-github >/dev/null; vl alice status)"
 
 echo "== notes flow both ways"
 bmtool bob write-note --title "From bob" --folder notes --content "- [fact] hello from bob" --project mixim-ai-public
@@ -209,27 +208,31 @@ check "  ...and sheety's Basic Memory block followed" jq -e '.basicMemory.primar
 
 echo "== your changes in config.toml"
 CONFIG="$ROOT/alice/.vaultlines/config.toml"
-vl alice vault create local/recipes --about "Food." >/dev/null
-check "a local vault is listed in config.toml" grep -q '^\[vaults."local/recipes"\]' "$CONFIG"
+vl alice vault create alice/vault-recipes --about "Food." >/dev/null
+check "a new vault stays on this computer" test -z "$(git -C "$V/alice/vault-recipes" remote)"
+vl alice vault create mixim-ai/vault-founders --about "Founders." --notes_from mixim-ai/studio >/dev/null
+A_STUDIO="$(clone alice mixim-ai/studio code/studio)"
+check "  ...an org vault too, with its notes_from" test "$(writes_of alice "$A_STUDIO" st)" = mixim-ai-founders
+check "  ...and nobody else gets it" jq -e '.repos | has("mixim-ai/vault-founders") | not' "$GH"
 mkdir -p "$ROOT/alice/writing"
 cat >> "$CONFIG" <<'EOF'
 
 [repos."mixim-ai/jorge-ip-theft"]
 writes = "mixim-ai/vault-public"
-reads  = ["local/recipes"]
+reads  = ["alice/vault-recipes"]
 
 [repos."mixim-ai/*"]
 reads = ["alice/vault-alice-personal"]
 
 [folders."~/writing"]
-writes = "local/recipes"
+writes = "alice/vault-recipes"
 EOF
 vl alice apply >/dev/null
 check "a [repos] entry wins over notes_from" test "$(writes_of alice "$A_JORGE" j2)" = mixim-ai-public
-check "  ...and adds its reads" jq -e '.rules.reads | index("local-recipes")' <(session alice j2)
+check "  ...and adds its reads" jq -e '.rules.reads | index("alice-recipes")' <(session alice j2)
 check "an owner-wide entry lets every mixim-ai repo read alice's own vault" \
   test "$(hook alice "$A_MKT" "$(read_event "$V/alice/vault-alice-personal/a.md" m4)")" = allow
-check "a [folders] entry counts outside joined repos" test "$(writes_of alice "$ROOT/alice/writing" w1)" = local-recipes
+check "a [folders] entry counts outside joined repos" test "$(writes_of alice "$ROOT/alice/writing" w1)" = alice-recipes
 
 echo "== auto_pull keeps a repo up to date, wherever it's cloned"
 A_WS="$(clone alice mixim-ai/mixim-workspace work/ws)"
@@ -246,15 +249,15 @@ echo "== a vault filled from Google Drive"
 if command -v rclone >/dev/null && command -v uv >/dev/null; then
   ACTION="$ROOT/action"
   admin clone -q "$R/mixim-ai/vault-hq.git" "$ACTION"
-  (cd "$ACTION" && GITHUB_REPOSITORY=mixim-ai/vault-hq vl alice gdrive run >/dev/null)
+  (cd "$ACTION" && GITHUB_REPOSITORY=mixim-ai/vault-hq vl alice source refresh --here >/dev/null)
   check "the Action wrote notes and pushed them" test "$(git --git-dir "$R/mixim-ai/vault-hq.git" log -1 --format=%s)" = "Update from Google Drive"
   N="$(git --git-dir "$R/mixim-ai/vault-hq.git" rev-list --count HEAD)"
-  (cd "$ACTION" && GITHUB_REPOSITORY=mixim-ai/vault-hq vl alice gdrive run >/dev/null)
+  (cd "$ACTION" && GITHUB_REPOSITORY=mixim-ai/vault-hq vl alice source refresh --here >/dev/null)
   check "  ...and a second run pushes nothing" test "$(git --git-dir "$R/mixim-ai/vault-hq.git" rev-list --count HEAD)" = "$N"
   vl alice sync >/dev/null && vl bob sync >/dev/null
   HQ="$VB/mixim-ai/vault-hq"
   check "bob got the notes" grep -q "Comptroller" "$HQ/Finance/Runway.xlsx.md"
-  check "  ...pointing to the original" grep -qx 'fetch: "vl gdrive fetch mixim-ai/vault-hq \\"Finance/Runway.xlsx\\""' "$HQ/Finance/Runway.xlsx.md"
+  check "  ...pointing to the original" grep -qx 'fetch: "vl source fetch mixim-ai/vault-hq \\"Finance/Runway.xlsx\\""' "$HQ/Finance/Runway.xlsx.md"
   check "  ...and a note without text for what can't be converted" grep -qx 'text: "not convertible"' "$HQ/old.zip.md"
   echo "edited" >> "$HQ/old.zip.md"
   check "bob's sync takes the vault as GitHub has it" grep -q "local changes were moved to the branch" <<<"$(vl bob sync)"
@@ -265,24 +268,24 @@ else
   vl alice sync >/dev/null && vl bob sync >/dev/null
 fi
 # The Action keeps Drive's file IDs; a local folder has none, so add two notes as it would.
-note() { printf -- '---\ntitle: "%s"\ntype: "drive-file"\nsource: "gdrive"\nid: "%s"\npath: "%s"\nfetch: "vl gdrive fetch mixim-ai/vault-hq \\"%s\\""\n---\n\ntext\n' "$1" "$2" "$3" "$3"; }
+note() { printf -- '---\ntitle: "%s"\ntype: "drive-file"\nsource: "gdrive"\nid: "%s"\npath: "%s"\nfetch: "vl source fetch mixim-ai/vault-hq \\"%s\\""\n---\n\ntext\n' "$1" "$2" "$3" "$3"; }
 mkdir -p "$ROOT/admin/mixim-ai/vault-hq/Real" && note Runway F1 "Real/Runway.xlsx" > "$ROOT/admin/mixim-ai/vault-hq/Real/Runway.xlsx.md"
 note Secret F403 "Real/Secret.pdf" > "$ROOT/admin/mixim-ai/vault-hq/Real/Secret.pdf.md"
 publish mixim-ai/vault-hq "Update from Google Drive"
 vl bob sync >/dev/null
-FETCHED="$(vl bob gdrive fetch mixim-ai/vault-hq "Real/Runway.xlsx" 2>/dev/null)"
-check "vl gdrive fetch signs in and gets one original" test "$(cat "$FETCHED")" = "PK original"
+FETCHED="$(vl bob source fetch mixim-ai/vault-hq "Real/Runway.xlsx" 2>/dev/null)"
+check "vl source fetch logs in and gets one original" test "$(cat "$FETCHED")" = "PK original"
 check "  ...into the fetch folder, read-only" test "$FETCHED" = "$ROOT/bob/.vaultlines/cache/fetch/mixim-ai/vault-hq/Real/Runway.xlsx" -a ! -w "$FETCHED"
-check "  ...keeping the sign-in for vl only" test "$(stat -f %Lp "$ROOT/bob/.vaultlines/google/1234-abc.json")" = 600
-check "  ...and says so when Drive won't share a file" grep -q "Ask for access to Mixim HQ" <<<"$(vl bob gdrive fetch mixim-ai/vault-hq "Real/Secret.pdf" 2>&1 || true)"
+check "  ...keeping the login for vl only" test "$(stat -f %Lp "$ROOT/bob/.vaultlines/google/1234-abc.json")" = 600
+check "  ...and says so when Drive won't share a file" grep -q "can.t open this file in Drive. Ask for access to" <<<"$(vl bob source fetch mixim-ai/vault-hq "Real/Secret.pdf" 2>&1 || true)"
 start bob "$B_MKT" f1 >/dev/null
-check "the hook lets a session fetch from a vault it reads" test "$(hook bob "$B_MKT" "$(bash_event 'vl gdrive fetch mixim-ai/vault-hq "Real/Runway.xlsx"' f1)")" = allow
+check "the hook lets a session fetch from a vault it reads" test "$(hook bob "$B_MKT" "$(bash_event 'vl source fetch mixim-ai/vault-hq "Real/Runway.xlsx"' f1)")" = allow
 check "  ...counting it as a read" jq -e '.read | index("mixim-ai-hq")' <(session bob f1)
 check "  ...so a write to vault-public asks (bob can't list who reads vault-hq)" \
   test "$(hook bob "$B_MKT" "$(write_event "$VB/mixim-ai/vault-public/x.md" f1)")" = ask
 check "reading a fetched original is a read" test "$(hook bob "$B_MKT" "$(read_event "$FETCHED" f1)")" = allow
 check "  ...and writing it is denied" test "$(hook bob "$B_MKT" "$(write_event "$FETCHED" f1)")" = deny
-check "the Desktop can't fetch" test "$(hook bob "$ROOT/bob" "$(bash_event 'vl gdrive fetch mixim-ai/vault-hq x' d2)")" = deny
+check "the Desktop can't fetch" test "$(hook bob "$ROOT/bob" "$(bash_event 'vl source fetch mixim-ai/vault-hq x' d2)")" = deny
 
 echo "== publishing a personal vault"
 vl bob vault publish mixim-ai/vault-bob-personal >/dev/null

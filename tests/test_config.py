@@ -9,21 +9,19 @@ GOOD = """
 sync_interval  = 300
 on_leak        = "block"
 
-[vaults."local/recipes"]
-
 [repos."mixim-ai/postal"]
 writes    = "mixim-ai/vault-public"
-reads     = ["local/recipes"]
+reads     = ["kabir/vault-recipes"]
 auto_pull = true
 
 [repos."mixim-ai/*"]
 reads = ["kabir/vault-side"]
 
 [folders."~/Documents/writing"]
-writes = "local/recipes"
+writes = "kabir/vault-recipes"
 
 [folders."{folder}"]
-reads = ["local/recipes"]
+reads = ["kabir/vault-recipes"]
 """
 
 
@@ -44,7 +42,7 @@ def write(home, text):
 def test_no_file_is_the_defaults(home):
     cfg = config.load_file()
     assert (cfg.sync_interval, cfg.check_interval, cfg.on_leak, cfg.basic_memory) == (600, 86400, "ask", True)
-    assert (cfg.local, cfg.repos, cfg.folders) == ([], {}, {})
+    assert (cfg.repos, cfg.folders) == ({}, {})
 
 
 def test_the_template_is_only_comments_and_loads_as_the_defaults(home):
@@ -53,7 +51,7 @@ def test_the_template_is_only_comments_and_loads_as_the_defaults(home):
     assert all(line.startswith("#") or not line.strip() for line in text.splitlines())
     assert '# [repos."mixim-ai/postal"]' in text
     cfg = config.load_file()
-    assert (cfg.local, cfg.repos, cfg.folders) == ([], {}, {})
+    assert (cfg.repos, cfg.folders) == ({}, {})
     config.write_template()  # never replaces your file
     assert config.config_path().read_text() == text
 
@@ -73,21 +71,19 @@ def test_uncommenting_the_template_examples_gives_a_good_config(home):
             lines.append(line)
     path.write_text("\n".join(lines) + "\n")
     cfg = config.load_file()
-    assert cfg.local == ["local/recipes"]
     assert cfg.repos["mixim-ai/postal"].writes == "mixim-ai/vault-public"
-    assert cfg.folders[str(home / "Documents" / "writing")].writes == "local/recipes"
+    assert cfg.folders[str(home / "Documents" / "writing")].writes == "kabir/vault-recipes"
 
 
 def test_load_a_good_config(home):
     write(home, GOOD)
     cfg = config.load_file()
     assert (cfg.sync_interval, cfg.on_leak) == (300, "block")
-    assert cfg.local == ["local/recipes"]
     postal = cfg.repos["mixim-ai/postal"]
-    assert (postal.writes, postal.reads, postal.auto_pull) == ("mixim-ai/vault-public", ["local/recipes"], True)
+    assert (postal.writes, postal.reads, postal.auto_pull) == ("mixim-ai/vault-public", ["kabir/vault-recipes"], True)
     assert cfg.repos["mixim-ai/*"].writes is None
     writing = cfg.folders[str(home / "Documents" / "writing")]
-    assert (writing.writes, writing.reads) == ("local/recipes", [])
+    assert (writing.writes, writing.reads) == ("kabir/vault-recipes", [])
     assert cfg.folders[str(home / "notes")].writes is None
 
 
@@ -102,16 +98,15 @@ def test_repo_names_ignore_case(home):
     ("sync_interval  = 300", "sync_interval = true", "sync_interval"),
     ("sync_interval  = 300", "colour = 1", "colour: unknown key"),
     ("sync_interval  = 300", "basic_memory = 1", "basic_memory: should be true or false"),
-    ('[vaults."local/recipes"]', '[vaults."mixim-ai/vault-x"]', "only local/NAME"),
-    ('[vaults."local/recipes"]', '[vaults."local/Recipes"]', "lowercase"),
-    ('[vaults."local/recipes"]', '[vaults."local/recipes"]\nabout = "x"', "unknown key"),
+    ("sync_interval  = 300", '[vaults."kabir/vault-recipes"]', "vaults: unknown key"),
     ('[repos."mixim-ai/postal"]', '[repos."postal"]', "OWNER/REPO"),
     ('[repos."mixim-ai/*"]', '[repos."*/*"]', "OWNER/REPO"),
     ('writes    = "mixim-ai/vault-public"', 'writes = "vault-public"', "OWNER/REPO"),
     ('writes    = "mixim-ai/vault-public"', 'writes = ["mixim-ai/vault-public"]', "should be one vault"),
-    ('reads     = ["local/recipes"]', 'reads = "local/recipes"', "should be a list"),
-    ('reads     = ["local/recipes"]', 'reads = ["mixim-ai/vault-public"]', "can't also be in reads"),
+    ('reads     = ["kabir/vault-recipes"]', 'reads = "kabir/vault-recipes"', "should be a list"),
+    ('reads     = ["kabir/vault-recipes"]', 'reads = ["mixim-ai/vault-public"]', "can't also be in reads"),
     ("auto_pull = true", "autopull = true", "unknown key"),
+    ("auto_pull = true", 'allow_vl_commands = "yes"', "allow_vl_commands: should be true or false"),
     ("auto_pull = true", 'auto_pull = "yes"', "true or false"),
     ('reads = ["kabir/vault-side"]', 'auto_pull = true', "auto_pull needs one repo"),
     ('[folders."~/Documents/writing"]', '[folders."*"]', "a folder"),
@@ -128,7 +123,7 @@ def test_validation_errors(home, old, new, message):
 
 
 def test_the_same_folder_twice(home):
-    write(home, GOOD + '\n[folders."~/Documents/writing/"]\nwrites = "local/recipes"\n')
+    write(home, GOOD + '\n[folders."~/Documents/writing/"]\nwrites = "kabir/vault-recipes"\n')
     with pytest.raises(VlError, match="same folder"):
         config.load_file()
 
@@ -139,12 +134,6 @@ def test_basic_memory_can_be_switched_off(home):
     assert "basic_memory = false" in config.config_path().read_text()
 
 
-def test_adding_a_local_vault_keeps_your_comments(home):
-    config.write_template()
-    config.add_local_vault("local/recipes")
-    config.add_local_vault("local/recipes")  # once only
-    text = config.config_path().read_text()
-    assert text.count('[vaults."local/recipes"]') == 2  # the example, and the real one
-    assert text.count('\n[vaults."local/recipes"]\n') == 1
-    assert "# Your own changes." in text
-    assert config.load_file().local == ["local/recipes"]
+def test_a_repo_can_allow_vl_commands(home):
+    write(home, '[repos."sarink/vaultlines"]\nallow_vl_commands = true\n')
+    assert config.load_file().repos["sarink/vaultlines"].allow_vl_commands is True

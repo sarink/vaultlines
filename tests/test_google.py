@@ -1,4 +1,4 @@
-"""google.py: read-only sign-in, the token check and the Drive API, against a fake Google."""
+"""google.py: read-only login, the token check and the Drive API, against a fake Google."""
 
 from __future__ import annotations
 

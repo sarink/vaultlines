@@ -1,24 +1,22 @@
-"""The Google Drive source: one markdown note per Drive file, originals fetched on demand.
+"""The gdrive source kind: one markdown note per Google Drive file, originals fetched on demand.
 
-A Drive vault is a GitHub repo whose vault.toml has a [source] table:
+A vault's vault.toml says where it's filled from:
 
     [source]
     kind                 = "gdrive"
-    shared_drive         = "0AHF8p0HI9kM1Uk9PVA"   # the shared drive's ID
-    shared_drive_name    = "Mixim HQ"
-    folder               = ""                      # the whole drive, or a folder in it
-    max_size             = "50M"                   # bigger files get a note without text
+    shared_drive         = "Mixim HQ"     # the shared drive's name (or ID)
+    folder               = ""             # the whole drive, or a folder in it
+    max_size             = "50M"          # bigger files get a note without text
     google_client_id     = "1234-abc.apps.googleusercontent.com"
-    google_client_secret = "GOCSPX-…"              # a desktop app's; Google doesn't treat it as secret
+    google_client_secret = "GOCSPX-…"     # a desktop app's; Google doesn't treat it as secret
 
-A GitHub Action in the repo fills it (`vl gdrive run`, every hour), signed in as a bot
-account with read-only access. Each run lists Drive, downloads only new and changed files
-to a temporary folder, turns them into text with markitdown, writes one note per file,
-commits and pushes. The vault holds only notes. Everyone else only pulls it, and the hook
-makes it read-only in sessions.
+The vault's fill job (a GitHub Action) runs `vl source refresh --here` every hour, logged
+in as a bot account with read-only access to Drive. Each refresh lists Drive, downloads only
+new and changed files to a temporary folder, turns them into text with markitdown, and
+writes one note per file. The vault holds only notes.
 
-Each note's frontmatter points to its original, which `vl gdrive fetch OWNER/REPO PATH`
-downloads with your own read-only Google sign-in, when Claude needs it.
+Each note's frontmatter points to its original, which `vl source fetch OWNER/REPO PATH`
+downloads with your own read-only Google login, when Claude needs it.
 
 `vl hook` imports this module, so it only imports the standard library at the top.
 """
@@ -33,8 +31,20 @@ from dataclasses import dataclass
 from pathlib import Path
 
 NAME = "Google Drive"
-SOURCE = "gdrive"  # the `source` key of every note this source writes
-KEYS = {"kind", "shared_drive", "shared_drive_name", "folder", "max_size", "google_client_id", "google_client_secret"}
+SOURCE = "gdrive"  # the kind, and the `source` key of every note this source writes
+# The [source] keys, besides `kind`. `vl vault create --source gdrive` takes each as --KEY.
+OPTIONS = {
+    "shared_drive": "the shared drive's name (or ID)",
+    "folder": "only this folder of the drive (default: the whole drive)",
+    "max_size": 'bigger files get a note without text (default: "50M")',
+    "google_client_id": "the client ID of the Google OAuth app (desktop type)",
+    "google_client_secret": "its secret (a desktop app's; Google doesn't treat it as secret)",
+}
+DEFAULTS = {"folder": "", "max_size": "50M"}
+REQUIRED = ("shared_drive", "google_client_id", "google_client_secret")
+KEYS = {"kind", *OPTIONS}
+# The fill job's setup, before `vl source refresh --here`.
+SETUP_STEPS = "      - run: curl -fsSL https://rclone.org/install.sh | sudo bash -s __RCLONE__\n"
 # rclone exports each Google type to the first of these it supports: Docs to .md,
 # Sheets to .xlsx, Slides and Drawings to .pdf. Forms and others are left out.
 EXPORT_FLAGS = ["--drive-export-formats", "md,xlsx,pdf", "--drive-skip-shortcuts"]
@@ -43,9 +53,7 @@ MARKITDOWN = "0.1.8"
 CONVERTER = f"markitdown {MARKITDOWN}"
 MAX_TEXT = 200_000  # bytes of text in a note
 BATCH = 100  # files downloaded and converted at once
-RCLONE = "v1.75.0"  # installed by the Action
-WORKFLOW_FILE = "vl-gdrive.yml"
-COMMIT = "Update from Google Drive"
+RCLONE = "v1.75.0"  # installed by the fill job
 
 # Frontmatter keys vl writes, in order. Any other key is kept as it is.
 OURS = ("title", "type", "source", "id", "path", "url", "modified", "md5", "mime", "converter", "text", "fetch")
@@ -80,10 +88,12 @@ def _bad_path(path: str) -> bool:
 def validate_source(source: dict) -> list[str]:
     """Problems with a vault's [source] table, as "key: problem"."""
     problems = [f"{key}: unknown key. Allowed: {', '.join(sorted(KEYS))}" for key in source if key not in KEYS]
+    for key in REQUIRED:
+        if not isinstance(source.get(key), str) or not source[key].strip():
+            problems.append(f"{key}: missing. {OPTIONS[key][0].upper()}{OPTIONS[key][1:]}.")
     drive = source.get("shared_drive", "")
-    if not isinstance(drive, str) or not (re.fullmatch(r"[A-Za-z0-9_-]*", drive)
-                                          or (_test_remotes() and drive.startswith("/"))):
-        problems.append("shared_drive: should be a shared drive's ID, or \"\" for My Drive")
+    if isinstance(drive, str) and drive.startswith("/") and not _test_remotes():
+        problems.append("shared_drive: should be a shared drive's name or ID, not a folder")
     folder = source.get("folder", "")
     if not isinstance(folder, str) or (folder and _bad_path(folder.strip("/") if folder.endswith("/") else folder)):
         problems.append("folder: should be a folder in the drive, like \"Finance/2024\", or \"\" for all of it")
@@ -92,23 +102,7 @@ def validate_source(source: dict) -> list[str]:
         parse_size(max_size if isinstance(max_size, str) else "")
     except ValueError:
         problems.append('max_size: should be a size, like "50M"')
-    for key in ("google_client_id", "google_client_secret"):
-        if not isinstance(source.get(key), str) or not source[key].strip():
-            problems.append(f"{key}: missing. `vl gdrive add` writes it")
     return problems
-
-
-def _source(vault) -> dict:
-    """A vault's [source] table, checked."""
-    from ..util import VlError
-
-    source = vault.source or {}
-    if source.get("kind") != SOURCE:
-        raise VlError(f"{vault.id} isn't filled from Google Drive.")
-    problems = validate_source(source)
-    if problems:
-        raise VlError(f"{vault.id}'s vault.toml has problems in [source]: " + "; ".join(problems))
-    return source
 
 
 def remote_path(source: dict) -> str:
@@ -120,8 +114,8 @@ def remote_path(source: dict) -> str:
     return f"gdrive:{folder}"
 
 
-def rclone_config(source: dict, access: str, refresh: str) -> str:
-    """A temporary rclone.conf for one run: the bot's read-only sign-in and the drive."""
+def rclone_config(source: dict, drive_id: str, access: str, refresh: str) -> str:
+    """A temporary rclone.conf for one refresh: the bot's read-only login and the drive."""
     import datetime as dt
 
     expiry = (dt.datetime.now(dt.UTC) + dt.timedelta(minutes=50)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -129,8 +123,8 @@ def rclone_config(source: dict, access: str, refresh: str) -> str:
     lines = ["[gdrive]", "type = drive", "scope = drive.readonly",
              f"client_id = {source['google_client_id']}", f"client_secret = {source['google_client_secret']}",
              f"token = {token}"]
-    if source.get("shared_drive"):
-        lines.append(f"team_drive = {source['shared_drive']}")
+    if drive_id:
+        lines.append(f"team_drive = {drive_id}")
     return "\n".join(lines) + "\n"
 
 
@@ -260,7 +254,7 @@ def _stale(f: File, n: Note) -> bool:
             or n.meta.get("converter") != CONVERTER)
 
 
-def changes(files: list[File], notes: list[Note], rebuild: bool = False, taken: set[str] = frozenset()) -> list[Change]:
+def changes(files: list[File], notes: list[Note], force: bool = False, taken: set[str] = frozenset()) -> list[Change]:
     """What to do to make the notes match the listing. Pure."""
     paths = note_paths(files, taken)
     plan = []
@@ -279,7 +273,7 @@ def changes(files: list[File], notes: list[Note], rebuild: bool = False, taken: 
         n = by_key.get(f.key)
         if n is None:
             plan.append(Change("add", f, None, dest))
-        elif rebuild or _stale(f, n):
+        elif force or _stale(f, n):
             plan.append(Change("update", f, n, dest))
         elif n.file != dest or n.meta.get("path") != f.path:
             plan.append(Change("move", f, n, dest))
@@ -369,7 +363,7 @@ def kind_of(mime: str, path: str) -> str | None:
 def fetch_command(vault_id: str, path: str) -> str:
     """The command that fetches a file, quoted for the shell."""
     quoted = re.sub(r'([\\"$`])', r"\\\1", path)
-    return f'vl gdrive fetch {vault_id} "{quoted}"'
+    return f'vl source fetch {vault_id} "{quoted}"'
 
 
 def cut(text: str, fetch: str) -> tuple[str, str]:
@@ -502,7 +496,7 @@ def _remove_empty_folders(root: Path) -> None:
             pass  # not empty
 
 
-def run(root: Path, settings: dict, vault_id: str, remote: str, conf: str | None, rebuild: bool = False) -> str:
+def run(root: Path, settings: dict, vault_id: str, remote: str, conf: str | None, force: bool = False) -> str:
     """Make the notes in `root` match the Drive folder `remote` (an rclone path; `conf` its
     rclone.conf). Returns a status like "3 new, 1 changed, 0 moved, 0 deleted"."""
     import tempfile
@@ -515,7 +509,7 @@ def run(root: Path, settings: dict, vault_id: str, remote: str, conf: str | None
     files = _list(remote, conf)
     notes = read_notes(root, source)
     taken = set(_markdown(root)) - {n.file for n in notes}
-    plan = changes(files, notes, rebuild, taken)
+    plan = changes(files, notes, force, taken)
     count = Counter(c.kind for c in plan)
 
     # Notes that move are read and taken away before any is written, so two files that
@@ -594,181 +588,80 @@ def run(root: Path, settings: dict, vault_id: str, remote: str, conf: str | None
 
 def source_briefing(short: str, vault_id: str) -> str:
     return (f"`{short}` holds notes converted from Google Drive; for an original, run "
-            f"`vl gdrive fetch {vault_id} \"<path from the note's frontmatter>\"`.")
+            f"`vl source fetch {vault_id} \"<path from the note's frontmatter>\"`.")
 
 
-# ---------------------------------------------------------------- the GitHub Action
+# ---------------------------------------------------------------- vl's side
 
-WORKFLOW = """\
-# Written by `vl gdrive add`. It fills this vault from Google Drive.
-name: vl gdrive
-on:
-  schedule: [{ cron: "17 * * * *" }]        # hourly; edit to change
-  workflow_dispatch: { inputs: { rebuild: { type: boolean, default: false } } }
-concurrency: { group: vl-gdrive }            # one run at a time
-permissions: { contents: write }
-jobs:
-  fill:
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - run: curl -fsSL https://rclone.org/install.sh | sudo bash -s __RCLONE__
-      - run: uvx --from "git+https://github.com/sarink/vaultlines@v__VERSION__" vl gdrive run ${{ inputs.rebuild && '--rebuild' || '' }}
-        env:
-          VL_GDRIVE_TOKEN: ${{ secrets.VL_GDRIVE_TOKEN }}   # read-only refresh token of the bot account
-"""
+def default_about(source: dict) -> str:
+    return f"The text of every file in the {source['shared_drive']} shared drive. Claude only reads it."
 
 
-def workflow() -> str:
-    from .. import __version__
-
-    return WORKFLOW.replace("__RCLONE__", RCLONE).replace("__VERSION__", __version__)
-
-
-def _vault_id_here(root: Path, given: str | None) -> str:
-    from ..util import VlError
-    from ..vaults import git_origin, remote_id
-
-    found = (given or os.environ.get("GITHUB_REPOSITORY") or remote_id(git_origin(root)) or "").strip().lower()
-    if not found or "/" not in found:
-        raise VlError("Can't tell which vault this is. Run it in the vault's clone, or pass --vault OWNER/REPO.")
-    return found
+def comments(source: dict) -> dict:
+    """Comments for the [source] table vl writes."""
+    return {"folder": None if source.get("folder") else "the whole drive",
+            "google_client_secret": "a desktop app's secret; Google doesn't treat it as secret"}
 
 
-def cmd_run(args) -> None:
-    """The Action: convert, commit, push. Runs in the vault's checkout."""
+def _drive_id(access: str, source: dict) -> tuple[str, str]:
+    """(ID, name) of the shared drive."""
+    from .. import google
+
+    return google.find_shared_drive(google.shared_drives(access), source["shared_drive"])
+
+
+def create(vault_id: str, source: dict) -> tuple[dict, str]:
+    """`vl vault create --source gdrive`, on an admin's computer: log in as the bot account,
+    check it can only read and can open the shared drive. Returns the [source] table and the
+    fill job's secret (the bot's refresh token)."""
+    from .. import google
+    from ..util import say
+
+    say("Log in to Google as the bot account: the account that only reads the shared drive.")
+    refresh_token = google.login(source["google_client_id"], source["google_client_secret"])
+    access = google.access_token(source["google_client_id"], source["google_client_secret"], refresh_token)
+    _drive_id(access, source)
+    return source, refresh_token
+
+
+def refresh(root: Path, source: dict, vault_id: str, token: str, force: bool) -> str:
+    """The fill job: make the notes in `root` match the drive. Returns a status."""
     import tempfile
 
-    from .. import gitsync, google
-    from ..util import VlError, say
-    from ..vaults import VAULT_FILE, parse_vault_toml
-
-    root = Path(args.path or ".").resolve()
-    info, problems = parse_vault_toml((root / VAULT_FILE).read_text() if (root / VAULT_FILE).exists() else "")
-    source = info.source or {}
-    if source.get("kind") != SOURCE:
-        raise VlError(f"{root / VAULT_FILE} has no [source] with kind = \"gdrive\".")
-    problems = validate_source(source)
-    if problems:
-        raise VlError("vault.toml [source]: " + "; ".join(problems))
-    vault_id = _vault_id_here(root, args.vault)
-    if not gitsync.git(root, "config", "user.email", check=False).stdout.strip():
-        gitsync.git(root, "config", "user.name", "github-actions[bot]")
-        gitsync.git(root, "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com")
-    remote = remote_path(source)
-    with tempfile.TemporaryDirectory(prefix="vl-gdrive-") as work:
-        conf = None
-        if not (_test_remotes() and (source.get("shared_drive") or "").startswith("/")):
-            token = os.environ.get("VL_GDRIVE_TOKEN", "").strip()
-            if not token:
-                raise VlError("VL_GDRIVE_TOKEN isn't set. `vl gdrive add` puts it in the repo's Actions secrets.")
-            access = google.access_token(source["google_client_id"], source["google_client_secret"], token)
-            google.check_read_only(access)
-            conf = os.path.join(work, "rclone.conf")
-            fd = os.open(conf, os.O_WRONLY | os.O_CREAT, 0o600)
-            with os.fdopen(fd, "w") as f:
-                f.write(rclone_config(source, access, token))
-        try:
-            status = run(root, source, vault_id, remote, conf, rebuild=args.rebuild)
-        except VlError:
-            if gitsync.commit(root, "Partial update from Google Drive"):  # what did arrive is kept
-                _push(root)
-            raise
-    if gitsync.commit(root, COMMIT):
-        _push(root)
-        say(status)
-    else:
-        say(f"no changes ({status})")
-
-
-def _push(root: Path) -> None:
-    from .. import gitsync
+    from .. import google
     from ..util import VlError
+    from . import TOKEN_MISSING
 
-    if gitsync.remote_url(root) and gitsync.git(root, "push", "-q", "origin", "HEAD", check=False).returncode != 0:
-        raise VlError("couldn't push the notes")
-
-
-# ---------------------------------------------------------------- vl gdrive add (admins)
-
-def cmd_add(args) -> None:
-    from .. import config, github, gitsync, google, vaults
-    from ..cli import _apply, _discovery, _record
-    from ..util import VlError, contract, say
-
-    vault_id = args.vault.strip().lower()
-    if not vaults.valid_id(vault_id) or not vault_id.split("/", 1)[1].startswith(vaults.PREFIX):
-        raise VlError("Give OWNER/vault-NAME, like mixim-ai/vault-hq.")
-    owner = vault_id.split("/")[0]
-    cfg = config.load()
-    if owner not in cfg.owners:
-        raise VlError(f"You haven't joined {owner}. Run `vl org join {owner}` first.")
-    if vault_id in cfg.vaults or vaults.path_of(vault_id).exists() or github.exists(vault_id):
-        raise VlError(f"{vault_id} already exists.")
-    folder = (args.folder or "").strip("/")
-    if folder and _bad_path(folder):
-        raise VlError(f"--folder: {args.folder!r} should be a folder in the drive, like Finance/2024.")
-    if "workflow" not in github.scopes():
-        raise VlError("Your GitHub sign-in can't add workflow files, and the vault needs one. "
-                      "Run `gh auth refresh -h github.com -s workflow`, then try again.")
-    say("Sign in as the bot account: the Google account that only reads the shared drive.")
-    refresh = google.login(args.client_id, args.client_secret)
-    access = google.access_token(args.client_id, args.client_secret, refresh)
-    drive_id, drive_name = google.find_shared_drive(google.shared_drives(access), args.shared_drive)
-    source = {"kind": SOURCE, "shared_drive": drive_id, "shared_drive_name": drive_name, "folder": folder,
-              "max_size": MAX_SIZE, "google_client_id": args.client_id, "google_client_secret": args.client_secret}
-    about = args.about or f"The text of every file in the {drive_name} shared drive. Claude only reads it."
-    path = vaults.path_of(vault_id)
-    path.mkdir(parents=True)
-    try:
-        (path / vaults.VAULT_FILE).write_text(vaults.render_vault_toml(about, source=source, source_comments={
-            "folder": "the whole drive" if not folder else None,
-            "google_client_secret": "a desktop app's secret; Google doesn't treat it as secret"}))
-        (path / ".github" / "workflows").mkdir(parents=True)
-        (path / ".github" / "workflows" / WORKFLOW_FILE).write_text(workflow())
-        gitsync.init_repo(path)
-        say(f"Creating the private GitHub repo {vault_id}")
-        github.create_private_repo(vault_id, path)
-    except VlError:
-        import shutil
-
-        shutil.rmtree(path, ignore_errors=True)
-        raise
-    github.set_secret(vault_id, "VL_GDRIVE_TOKEN", refresh)
-    github.run_workflow(vault_id, WORKFLOW_FILE)
-    _record(owner, [*_discovery().get(owner, {}).get("vaults", []), vault_id])
-    _apply(config.load())
-    say(f"\nMade {vault_id}, filled from {drive_name} every hour by a GitHub Action.")
-    say(f"The first run is starting. Watch it with `gh run watch --repo {vault_id}`.")
-    say(f"Give people read access to the repo on GitHub; `vl sync` finds it for them. Files: {contract(path)}")
+    remote = remote_path(source)
+    if _test_remotes() and (source.get("shared_drive") or "").startswith("/"):
+        return run(root, source, vault_id, remote, None, force=force)  # a local folder, in tests
+    if not token:
+        raise VlError(TOKEN_MISSING)
+    access = google.access_token(source["google_client_id"], source["google_client_secret"], token)
+    google.check_read_only(access)
+    drive_id, _ = _drive_id(access, source)
+    with tempfile.TemporaryDirectory(prefix="vl-gdrive-") as work:
+        conf = os.path.join(work, "rclone.conf")
+        fd = os.open(conf, os.O_WRONLY | os.O_CREAT, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(rclone_config(source, drive_id, access, token))
+        return run(root, source, vault_id, remote, conf, force=force)
 
 
-# ---------------------------------------------------------------- vl gdrive fetch / login / rebuild
-
-def _vault(ref: str):
-    from .. import config
-
-    v = config.load().vault(ref)
-    _source(v)
-    return v
-
-
-def _signed_in(v, source: dict) -> str:
-    """An access token for your own read-only sign-in for this vault's Google app. Signs in if needed."""
+def _logged_in(v, source: dict) -> str:
+    """An access token for your own read-only Google login for this vault. Logs in if needed."""
     from .. import google
     from ..util import VlError
 
     cid, secret = source["google_client_id"], source["google_client_secret"]
-    refresh = google.load_token(cid)
-    if not refresh:
-        refresh = google.login(cid, secret)
-        google.save_token(cid, refresh)
+    refresh_token = google.load_token(cid)
+    if not refresh_token:
+        refresh_token = google.login(cid, secret)
+        google.save_token(cid, refresh_token)
     try:
-        access = google.access_token(cid, secret, refresh)
+        access = google.access_token(cid, secret, refresh_token)
     except VlError as e:
-        raise VlError(f"{e} Run `vl gdrive login {v.id}`.") from None
+        raise VlError(f"{e} Run `vl source login {v.id}`.") from None
     google.check_read_only(access)
     return access
 
@@ -782,137 +675,41 @@ def check_fetch_path(path) -> None:
         raise VlError(f"{path!r} isn't a path inside the drive. Use the `path` from the note's frontmatter.")
 
 
-def cmd_fetch(args) -> None:
-    from .. import config, google
-    from ..util import VlError, fetch_dir, say
+def fetch(v, source: dict, short: str, path: str) -> Path:
+    """Download one original into the vault's fetch folder, read-only. Returns where it is."""
+    from .. import google
+    from ..util import VlError, fetch_dir
 
-    v = _vault(args.vault)
-    source = _source(v)
-    check_fetch_path(args.path)
-    note = next((n for n in read_notes(v.path) if n.meta.get("path") == args.path), None)
+    check_fetch_path(path)
+    note = next((n for n in read_notes(v.path) if n.meta.get("path") == path), None)
     if note is None:
-        raise VlError(f"No note in {v.id} has the path {args.path!r}. Use the `path` from the note's frontmatter.")
+        raise VlError(f"No note in {v.id} has the path {path!r}. Use the `path` from the note's frontmatter.")
     if not note.meta.get("id"):
-        raise VlError(f"The note for {args.path!r} has no Drive ID, so it can't be fetched.")
-    access = _signed_in(v, source)
+        raise VlError(f"The note for {path!r} has no Drive ID, so it can't be fetched.")
+    access = _logged_in(v, source)
     dest_root = fetch_dir(v.id)
-    dest = (dest_root / args.path).resolve()
+    dest = (dest_root / path).resolve()
     if not str(dest).startswith(str(dest_root.resolve()) + os.sep):
-        raise VlError(f"{args.path!r} isn't a path inside the drive.")
-    short = config.load().shorts[v.id]
+        raise VlError(f"{path!r} isn't a path inside the drive.")
     try:
         meta = google.file_meta(access, note.meta["id"])
         out = google.download(access, note.meta["id"], meta.get("mimeType") or "", dest)
     except google.NoAccess:
         raise VlError(f"You can read {short}, but your Google account can't open this file in Drive. "
-                      f"Ask for access to {source.get('shared_drive_name') or 'the shared drive'}.") from None
+                      f"Ask for access to {source['shared_drive']}.") from None
     os.utime(out)  # `vl sync` cleans by the time it was fetched
     out.chmod(0o444)
-    say(str(out))
+    return out
 
 
-def cmd_login(args) -> None:
+def login(v, source: dict) -> None:
     from .. import google
-    from ..util import say
 
-    v = _vault(args.vault)
-    source = _source(v)
-    refresh = google.login(source["google_client_id"], source["google_client_secret"])
-    google.save_token(source["google_client_id"], refresh)
-    say(f"Signed in to Google for {v.id}, read-only. `vl gdrive fetch` can get originals now.")
+    google.save_token(source["google_client_id"],
+                      google.login(source["google_client_id"], source["google_client_secret"]))
 
 
-def cmd_rebuild(args) -> None:
-    from .. import github
-    from ..util import say
-
-    v = _vault(args.vault)
-    github.run_workflow(v.id, WORKFLOW_FILE, {"rebuild": "true"})
-    say(f"Started a full rebuild of {v.id} on GitHub. Watch it with `gh run watch --repo {v.id}`.")
-
-
-def commands(subparsers) -> None:
-    import argparse
-
-    g = subparsers.add_parser("gdrive", help="vaults filled from Google Drive")
-    gsub = g.add_subparsers(dest="gdrive_command", required=True, metavar="ACTION")
-    s = gsub.add_parser("add", help="(admins) a vault filled from a shared drive by a GitHub Action")
-    s.add_argument("vault", metavar="OWNER/vault-NAME")
-    s.add_argument("--shared-drive", required=True, metavar="NAME_OR_ID")
-    s.add_argument("--folder", metavar="PATH", help="only this folder of the drive")
-    s.add_argument("--client-id", required=True, help="the Google OAuth app's client ID (desktop type)")
-    s.add_argument("--client-secret", required=True, help="its secret")
-    s.add_argument("--about", help="one line about the vault, for Claude")
-    s.set_defaults(func=cmd_add)
-    s = gsub.add_parser("fetch", help="download one original into the fetch folder and print where it is")
-    s.add_argument("vault", metavar="OWNER/vault-NAME")
-    s.add_argument("path", help="the `path` from the note's frontmatter")
-    s.set_defaults(func=cmd_fetch)
-    s = gsub.add_parser("login", help="sign in to Google again, for fetching")
-    s.add_argument("vault", metavar="OWNER/vault-NAME")
-    s.set_defaults(func=cmd_login)
-    s = gsub.add_parser("rebuild", help="start the vault's workflow, writing every note again")
-    s.add_argument("vault", metavar="OWNER/vault-NAME")
-    s.set_defaults(func=cmd_rebuild)
-    s = gsub.add_parser("run", help="only for the GitHub Action: convert, commit and push")
-    s.add_argument("--rebuild", action="store_true")
-    s.add_argument("--path", help=argparse.SUPPRESS)
-    s.add_argument("--vault", help=argparse.SUPPRESS)
-    s.set_defaults(func=cmd_run)
-
-
-# ---------------------------------------------------------------- vl's other commands
-
-def sync(v, stamp) -> str:
-    """A Drive vault only takes what the Action pushed."""
-    from .. import gitsync
-
-    return gitsync.pull_keeping_changes(v.path)
-
-
-def status(v) -> str:
-    from .. import gitsync
-
-    when = gitsync.git(v.path, "log", "-1", "--format=%cr", f"--grep={COMMIT}", check=False).stdout.strip()
-    return f"filled from Google Drive, updated {when or 'never'}"
-
-
-def joined(cfg, owner: str) -> None:
-    """After `vl org join`: offer the Google sign-in for fetching originals."""
-    import sys
-
+def logged_in(source: dict) -> bool:
     from .. import google
-    from ..util import VlError, say
 
-    for vid, v in sorted(cfg.vaults.items()):
-        if v.owner != owner or (v.source or {}).get("kind") != SOURCE or validate_source(v.source):
-            continue
-        if google.load_token(v.source["google_client_id"]):
-            continue
-        if sys.stdin.isatty():
-            answer = input(f"{vid} holds notes from Google Drive. Sign in to Google now, to fetch originals? [y/N] ")
-            if answer.strip().lower() in ("y", "yes"):
-                try:
-                    google.save_token(v.source["google_client_id"],
-                                      google.login(v.source["google_client_id"], v.source["google_client_secret"]))
-                    continue
-                except VlError as e:
-                    say(f"Google sign-in failed: {e}")
-        say(f"{vid} holds notes from Google Drive. To fetch originals, run `vl gdrive login {vid}`.")
-
-
-def doctor_sources(cfg, check) -> None:
-    from .. import google
-    from ..util import say
-
-    drives = [(vid, v) for vid, v in sorted(cfg.vaults.items()) if (v.source or {}).get("kind") == SOURCE]
-    if not drives:
-        return
-    say("Google Drive vaults")
-    for vid, v in drives:
-        problems = validate_source(v.source)
-        check(not problems, f"{vid}: [source] in vault.toml is complete", "; ".join(problems))
-        if not problems:
-            signed = google.load_token(v.source["google_client_id"]) is not None
-            say(f"  {'ok  ' if signed else 'note'}  {vid}: " +
-                ("signed in to Google for fetching" if signed else f"not signed in for fetching (`vl gdrive login {vid}`)"))
+    return google.load_token(source["google_client_id"]) is not None

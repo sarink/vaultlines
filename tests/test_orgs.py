@@ -30,7 +30,7 @@ def mixim(fake_github, computer):
 
 
 def test_init_makes_your_personal_vault_on_this_computer_only(mixim, computer):
-    assert vl("init", "--no-basic-memory") == 0
+    assert vl("init") == 0
     personal = vaults_dir() / "alice" / "vault-alice-personal"
     assert (personal / ".git").is_dir() and origin(personal) is None
     info, problems = vaults.parse_vault_toml((personal / "vault.toml").read_text())
@@ -45,7 +45,7 @@ def test_init_makes_your_personal_vault_on_this_computer_only(mixim, computer):
 
 
 def test_init_publish_puts_the_personal_vault_on_github(mixim, computer):
-    assert vl("init", "--no-basic-memory", "--publish") == 0
+    assert vl("init", "--publish") == 0
     personal = vaults_dir() / "alice" / "vault-alice-personal"
     assert origin(personal) == mixim.url("alice/vault-alice-personal")
     assert mixim.load()["repos"]["alice/vault-alice-personal"] == {"push": ["alice"]}
@@ -53,7 +53,7 @@ def test_init_publish_puts_the_personal_vault_on_github(mixim, computer):
 
 def test_init_clones_a_personal_vault_published_from_another_computer(mixim, computer):
     mixim.vault("alice/vault-alice-personal", ["alice"], 'about = "From my laptop."\n')
-    assert vl("init", "--no-basic-memory") == 0
+    assert vl("init") == 0
     personal = vaults_dir() / "alice" / "vault-alice-personal"
     assert origin(personal) == mixim.url("alice/vault-alice-personal")
     assert vaults.parse_vault_toml((personal / "vault.toml").read_text())[0].about == "From my laptop."
@@ -86,7 +86,7 @@ def test_joining_twice_picks_up_new_vaults(mixim, computer):
 
 
 def test_joining_an_owner_that_doesnt_exist(mixim, computer, capsys):
-    vl("init", "--no-basic-memory")
+    vl("init")
     assert vl("org", "join", "no-such-org") == 1
     assert "no-such-org" in capsys.readouterr().err
     assert not (vaults_dir() / "no-such-org").exists()
@@ -106,14 +106,36 @@ def test_org_leave_keeps_the_files_unless_asked(mixim, computer, capsys):
 
 
 def test_you_cant_leave_your_own_account(mixim, computer, capsys):
-    vl("init", "--no-basic-memory")
+    vl("init")
     assert vl("org", "leave", "alice") == 1
     assert "your own account" in capsys.readouterr().err
 
 
-def test_vault_create_makes_a_private_repo_with_vault_toml(mixim, computer):
+def test_vault_create_makes_a_vault_on_this_computer(mixim, computer):
     vl("org", "join", "mixim-ai")
-    assert vl("vault", "create", "mixim-ai/vault-design", "--about", "Design notes.") == 0
+    assert vl("vault", "create", "mixim-ai/vault-founders", "--about", "Founders' notes.",
+              "--notes_from", "mixim-ai/jorge-ip-theft", "--notes_from", "Mixim-AI/Legal") == 0
+    path = vaults_dir() / "mixim-ai" / "vault-founders"
+    assert (path / ".git").is_dir() and origin(path) is None
+    assert "mixim-ai/vault-founders" not in mixim.load()["repos"]
+    info, problems = vaults.parse_vault_toml((path / "vault.toml").read_text())
+    assert problems == [] and info.about == "Founders' notes."
+    assert info.notes_from == ["mixim-ai/jorge-ip-theft", "mixim-ai/legal"]
+    data = runtime.load()
+    assert data["vaults"]["mixim-ai-founders"]["audience"]["kind"] == "me"
+    assert "mixim-ai-founders" in data["owners"]["mixim-ai"]["vaults"]
+    assert data["owners"]["mixim-ai"]["notes_from"]["mixim-ai/jorge-ip-theft"] == "mixim-ai-founders"
+    # The daily check doesn't think it was lost: it was never on GitHub.
+    state = json.loads(audience.state_path().read_text())
+    state["checked_at"] = 0
+    audience.state_path().write_text(json.dumps(state))
+    assert vl("sync") == 0
+    assert "mixim-ai-founders" in runtime.load()["owners"]["mixim-ai"]["vaults"]
+
+
+def test_vault_create_publish_makes_a_private_repo(mixim, computer):
+    vl("org", "join", "mixim-ai")
+    assert vl("vault", "create", "mixim-ai/vault-design", "--about", "Design notes.", "--publish") == 0
     path = vaults_dir() / "mixim-ai" / "vault-design"
     assert origin(path) == mixim.url("mixim-ai/vault-design")
     assert vaults.parse_vault_toml((path / "vault.toml").read_text())[0].about == "Design notes."
@@ -121,32 +143,32 @@ def test_vault_create_makes_a_private_repo_with_vault_toml(mixim, computer):
     assert "mixim-ai-design" in runtime.load()["vaults"]
 
 
+def test_any_local_vault_can_be_published(mixim, computer):
+    vl("org", "join", "mixim-ai")
+    vl("vault", "create", "mixim-ai/vault-founders")
+    assert vl("vault", "publish", "mixim-ai/vault-founders") == 0
+    assert origin(vaults_dir() / "mixim-ai" / "vault-founders") == mixim.url("mixim-ai/vault-founders")
+
+
+def test_there_is_no_local_owner(mixim, computer, capsys):
+    vl("init")
+    assert vl("vault", "create", "local/recipes") == 1
+    assert "start with vault-" in capsys.readouterr().err
+    assert vl("vault", "create", "alice/vault-recipes") == 0
+    assert "alice-recipes" in runtime.load()["owners"]["alice"]["vaults"]
+
+
 @pytest.mark.parametrize("name, message", [
     ("mixim-ai/design", "start with vault-"),
     ("other-org/vault-x", "vl org join other-org"),
     ("mixim-ai/vault-public", "already"),
+    ("mixim-ai/vault-notes --notes_from nope", "OWNER/REPO"),
     ("nope", "OWNER/vault-NAME"),
 ])
 def test_vault_create_refuses(mixim, computer, capsys, name, message):
     vl("org", "join", "mixim-ai")
-    assert vl("vault", "create", name) == 1
+    assert vl("vault", "create", *name.split()) != 0
     assert message in capsys.readouterr().err
-
-
-def test_vault_create_local(mixim, computer):
-    vl("init", "--no-basic-memory")
-    assert vl("vault", "create", "local/recipes", "--about", "Food.") == 0
-    path = vaults_dir() / "local" / "recipes"
-    assert (path / ".git").is_dir() and origin(path) is None
-    assert config.load_file().local == ["local/recipes"]
-    assert runtime.load()["vaults"]["local-recipes"]["about"] == "Food."
-
-
-def test_a_local_vault_in_config_toml_is_made_by_apply(mixim, computer):
-    vl("init", "--no-basic-memory")
-    config.add_local_vault("local/journal")
-    assert vl("apply") == 0
-    assert (vaults_dir() / "local" / "journal" / ".git").is_dir()
 
 
 def test_vault_publish(mixim, computer, capsys):
@@ -158,7 +180,7 @@ def test_vault_publish(mixim, computer, capsys):
     assert vl("vault", "publish", "mixim-ai/vault-alice-personal") == 1
     assert "already on GitHub" in capsys.readouterr().err
     assert vl("vault", "publish", "mixim-ai/vault-public") == 1
-    assert "only your personal vault" in capsys.readouterr().err
+    assert "already on GitHub" in capsys.readouterr().err
 
 
 def test_a_published_personal_vault_is_found_by_whoever_can_access_it(mixim, computer):

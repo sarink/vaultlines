@@ -15,10 +15,10 @@ keeps them, so a resumed session keeps them too. Then, for every call:
 4. Writes to a `reads` vault always ask.
 5. A vault filled from elsewhere (a [source], like Google Drive) is read-only.
 6. Reads are recorded here, before the call runs.
-7. A filled vault's fetch folder (originals from `vl gdrive fetch`) counts as the vault,
-   for reads only. `vl gdrive fetch OWNER/REPO` is a read of that vault.
+7. A filled vault's fetch folder (originals from `vl source fetch`) counts as the vault,
+   for reads only. `vl source fetch OWNER/REPO` is a read of that vault.
 8. vl itself: writes to its records are blocked, and so is any access to its Google
-   sign-ins; changes to config.toml, its hooks, or `vl` commands that change what it
+   logins; changes to config.toml, its hooks, or `vl` commands that change what it
    allows ask, unless your latest message mentions vl (UserPromptSubmit records that).
 
 `decide()` is pure. `main()` does the I/O. Only the standard library is imported,
@@ -47,8 +47,8 @@ MATCHER = "^(" + "|".join(["Read", "Write", "Edit", "MultiEdit", "NotebookEdit",
                             *(f"{p}.*" for p in plugins.TOOL_PREFIXES)]) + ")$"
 ERROR = "vl hook error: run `vl doctor`."
 RUNTIME_VERSION = 4  # runtime.json's layout
-FETCH_RE = re.compile(r"(?:^|[\s;&|(`])(?:\S*/)?vl\s+gdrive\s+fetch\s+['\"]?([A-Za-z0-9][A-Za-z0-9._/-]*)")
-FETCHED = "fetched originals are read-only copies. Run `vl gdrive fetch` again for a fresh one."
+FETCH_RE = re.compile(r"(?:^|[\s;&|(`])(?:\S*/)?vl\s+source\s+fetch\s+['\"]?([A-Za-z0-9][A-Za-z0-9._/-]*)")
+FETCHED = "fetched originals are read-only copies. Run `vl source fetch` again for a fresh one."
 REPO_HOWS = ("repos", "notes_from", "personal", "conflict")  # rules that came from the repo
 
 
@@ -210,7 +210,7 @@ def touched(event: dict, runtime: dict, rules: dict | None) -> Call:
                 if not _filled(runtime, v):  # a filled vault is only read; sync undoes any change
                     call.add(v, "write")
                     call.bash = True
-            # Originals from `vl gdrive fetch`, and `vl gdrive fetch` itself, only read.
+            # Originals from `vl source fetch`, and `vl source fetch` itself, only read.
             fetched = [_by_ref(runtime, ref.strip("'\"")) for ref in FETCH_RE.findall(command)]
             for v in bash_vaults(command, cwd, runtime, _fetch_paths(runtime)) + [v for v in fetched if v]:
                 call.add(v, "read")
@@ -335,9 +335,9 @@ def _leak_reason(state: dict, runtime: dict, target: str, people: list[str], ext
 # ---------------------------------------------------------------- vl's own files
 
 VL_COMMAND_RE = re.compile(
-    r"(?:^|[\s;&|(`])(?:\S*/)?vl\s+(init|apply|uninstall|org|vault|gdrive\s+add)\b")
+    r"(?:^|[\s;&|(`])(?:\S*/)?vl\s+(init|apply|uninstall|org|vault|source\s+login)\b")
 VL_ENV_RE = re.compile(r"\bVAULTLINES_[A-Z_]+")
-GOOGLE = "Google sign-ins are for vl only. To get an original from Drive, run `vl gdrive fetch OWNER/REPO PATH`."
+GOOGLE = "Google logins are for vl only. To get an original from Drive, run `vl source fetch OWNER/REPO PATH`."
 
 
 def _config_file(runtime: dict) -> str:
@@ -442,12 +442,24 @@ def _prompt(event: dict, runtime: dict, state: dict | None, project_dir: str) ->
     return state
 
 
+def _allows_vl_commands(runtime: dict, rules: dict | None) -> bool:
+    """config.toml lets sessions in this repo run vl commands without asking. Read from
+    runtime.json on every call, so a change applies to running sessions too."""
+    repo = (rules or {}).get("repo")
+    if not repo:
+        return False
+    repos = runtime.get("repos") or {}
+    return any((repos.get(key) or {}).get("allow_vl_commands") for key in (repo, repo.split("/")[0] + "/*"))
+
+
 def _pre_tool(event: dict, runtime: dict, state: dict | None, project_dir: str):
     guard = self_guard(event, runtime)
     if guard and guard[0] == "deny":
         return _pre("deny", guard[1]), None
     if guard and state and state.get("asked_vl"):
         guard = None  # you asked for this in your latest message
+    if guard and _allows_vl_commands(runtime, (state or {}).get("rules") or resolve(project_dir, runtime)):
+        guard = None
     out, new_state = _vault_rules(event, runtime, state, project_dir)
     if not guard:
         return out, new_state

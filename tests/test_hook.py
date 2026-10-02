@@ -75,10 +75,10 @@ def others(writes):
     ("legal", "acme-founders", others("acme-founders")),
     ("sheety", "acme-sam-personal", others("acme-sam-personal")),  # in no notes_from
     ("both", "acme-sam-personal", others("acme-sam-personal")),    # in two notes_from
-    ("blog", "sam-personal", ["sam-side"]),                  # your own account
+    ("blog", "sam-personal", ["sam-recipes", "sam-side"]),   # your own account
     ("oss", "sam-personal", []),                             # an owner you didn't join
     ("desktop", "sam-personal", []),                         # no repo
-    ("writing", "local-recipes", []),                        # a [folders] entry
+    ("writing", "sam-recipes", []),                          # a [folders] entry
 ])
 def test_where_claude_starts_decides_the_vaults(world, where, writes, reads):
     s = Session(world, getattr(world, where))
@@ -107,9 +107,9 @@ def test_a_config_entry_can_add_another_owners_vault(world):
 
 def test_rules_come_from_the_repo_not_the_folder_it_is_in(world):
     # The site repo is inside ~/code, which a [folders] entry covers; the repo wins.
-    world.runtime["folders"][str(world.home / "code")] = {"writes": "local-recipes", "reads": []}
+    world.runtime["folders"][str(world.home / "code")] = {"writes": "sam-recipes", "reads": []}
     assert Session(world, world.site).rules["writes"] == "acme-everyone"
-    assert Session(world, world.home / "code").rules["writes"] == "local-recipes"
+    assert Session(world, world.home / "code").rules["writes"] == "sam-recipes"
 
 
 # ---------------------------------------------------------------- the label
@@ -254,23 +254,23 @@ def test_bash_on_a_drive_vault_only_reads(world):
     assert s.state["read"] == ["acme-drive"]
 
 
-def test_vl_gdrive_fetch_is_a_read_of_its_vault(world):
+def test_vl_source_fetch_is_a_read_of_its_vault(world):
     s = Session(world, world.site)
-    assert s.call("Bash", command='vl gdrive fetch acme/vault-drive "Finance/Runway.xlsx"') is None
+    assert s.call("Bash", command='vl source fetch acme/vault-drive "Finance/Runway.xlsx"') is None
     assert s.state["read"] == ["acme-drive"]
     out = s.call("Write", file_path=world.vault("acme-everyone", "x.md"))
     assert decision(out) == "ask" and "ana would see this in acme-everyone" in reason(out)
 
 
-def test_vl_gdrive_fetch_by_short_name_too(world):
+def test_vl_source_fetch_by_short_name_too(world):
     s = Session(world, world.site)
-    assert s.call("Bash", command="vl gdrive fetch acme-drive x.pdf") is None
+    assert s.call("Bash", command="vl source fetch acme-drive x.pdf") is None
     assert s.state["read"] == ["acme-drive"]
 
 
-def test_vl_gdrive_fetch_of_a_vault_not_used_here_is_denied(world):
+def test_vl_source_fetch_of_a_vault_not_used_here_is_denied(world):
     s = Session(world, world.blog)
-    out = s.call("Bash", command="cd /tmp && ~/.local/bin/vl gdrive fetch 'acme/vault-drive' x.pdf")
+    out = s.call("Bash", command="cd /tmp && ~/.local/bin/vl source fetch 'acme/vault-drive' x.pdf")
     assert decision(out) == "deny"
     assert "`acme-drive` isn't used here" in reason(out)
 
@@ -303,7 +303,7 @@ def test_the_briefing(world):
     assert "Writing to those asks first. Other vaults are blocked here. " in ctx
     assert 'Always pass project="..." to Basic Memory tools.' in ctx
     assert ctx.endswith('`acme-drive` holds notes converted from Google Drive; for an original, run '
-                        '`vl gdrive fetch acme/vault-drive "<path from the note\'s frontmatter>"`.')
+                        '`vl source fetch acme/vault-drive "<path from the note\'s frontmatter>"`.')
 
 
 def test_the_briefing_without_plugins_or_reads(world):
@@ -448,7 +448,7 @@ def test_bash_scan(world):
     assert bash_vaults(f"cat {world.vault('acme-everyone', 'a.md')}", "/", rt) == ["acme-everyone"]
     assert bash_vaults("grep -r x ~/.vaultlines/vaults/acme/vault-founders/", "/", rt) == ["acme-founders"]
     assert bash_vaults('ls "$HOME/.vaultlines/vaults/sam/vault-side"', "/", rt) == ["sam-side"]
-    assert bash_vaults("ls ${HOME}/.vaultlines/vaults/local/recipes/", "/", rt) == ["local-recipes"]
+    assert bash_vaults("ls ${HOME}/.vaultlines/vaults/sam/vault-recipes/", "/", rt) == ["sam-recipes"]
     assert bash_vaults("ls vault-docs", str(world.vaults / "acme"), rt) == ["acme-docs"]
     assert bash_vaults("ls ~/.vaultlines/vaults/acme/vault-everyoneity", "/", rt) == []
     assert bash_vaults("ls", world.vault("acme-docs", "sub"), rt) == ["acme-docs"]  # cwd inside a vault
@@ -580,7 +580,7 @@ def test_google_sign_ins_are_off_limits(world):
                        ("Bash", {"command": f"ls {google.parent}"})):
         out = s.call(tool, **args)
         assert decision(out) == "deny", (tool, args)
-        assert "Google sign-ins" in reason(out)
+        assert "Google logins" in reason(out)
 
 
 def test_vl_commands_and_config_ask_unless_you_asked(world):
@@ -590,14 +590,15 @@ def test_vl_commands_and_config_ask_unless_you_asked(world):
     for tool, args in (("Bash", {"command": "vl org leave acme"}),
                        ("Bash", {"command": "cd /tmp && ~/.local/bin/vl uninstall"}),
                        ("Bash", {"command": "vl vault create acme/vault-x"}),
-                       ("Bash", {"command": "vl gdrive add acme/vault-hq --shared-drive HQ"}),
+                       ("Bash", {"command": "vl vault create acme/vault-hq --source gdrive"}),
+                       ("Bash", {"command": "vl source login acme/vault-drive"}),
                        ("Bash", {"command": "cat ~/.vaultlines/config.toml"}),
                        ("Bash", {"command": "VAULTLINES_HOME=/tmp/x vl status"}),
                        ("Bash", {"command": "echo '{\"disableAllHooks\": true}' > .claude/settings.json"}),
                        ("Edit", {"file_path": str(config), "old_string": "a", "new_string": "b"})):
         assert decision(s.call(tool, **args)) == "ask", args
     assert "Mention vl in your message" in reason(s.call("Bash", command="vl apply"))
-    for harmless in ("vl status", "vl doctor", "vl sync", "vl check", "vl gdrive fetch acme/vault-drive x",
+    for harmless in ("vl status", "vl doctor", "vl sync", "vl check", "vl source fetch acme/vault-drive x",
                      "echo evaluate this"):
         assert decision(s.call("Bash", command=harmless)) is None, harmless
 
@@ -652,3 +653,31 @@ def test_prompt_before_any_session_record(world):
                          "prompt": "vl status?"}, world.runtime, None, str(world.site))
     assert out is None
     assert state["asked_vl"] is True and state["label"] == []
+
+
+def test_a_repo_can_allow_vl_commands(world):
+    world.runtime["repos"]["acme/site"] = {"writes": None, "reads": [], "allow_vl_commands": True}
+    s = Session(world, world.site)
+    s.event({"hook_event_name": "UserPromptSubmit", "prompt": "tidy up"})
+    for command in ("vl apply", "uv run vl vault create acme/vault-x", "VAULTLINES_HOME=/tmp/x vl status",
+                    "cat ~/.vaultlines/config.toml"):
+        assert s.call("Bash", command=command) is None, command
+    assert s.call("Edit", file_path=str(world.vl / "config.toml"), old_string="a", new_string="b") is None
+    # vl's records and Google logins stay off limits.
+    assert decision(s.call("Write", file_path=str(world.vl / "state" / "runtime.json"), content="{}")) == "deny"
+    assert decision(s.call("Read", file_path=str(world.vl / "google" / "x.json"))) == "deny"
+    # The leak checks still apply to what the command touches.
+    s.call("Read", file_path=world.vault("acme-founders", "plan.md"))
+    assert decision(s.call("Bash", command=f"cp ~/.vaultlines/vaults/acme/vault-founders/p.md {world.vault('acme-everyone')}/ && vl sync")) == "ask"
+    # Other repos still ask.
+    other = Session(world, world.legal)
+    other.event({"hook_event_name": "UserPromptSubmit", "prompt": "tidy up"})
+    assert decision(other.call("Bash", command="vl apply")) == "ask"
+
+
+def test_allowing_vl_commands_takes_effect_in_running_sessions(world):
+    s = Session(world, world.blog)
+    s.event({"hook_event_name": "UserPromptSubmit", "prompt": "tidy up"})
+    assert decision(s.call("Bash", command="vl apply")) == "ask"
+    world.runtime["repos"]["sam/*"] = {"writes": None, "reads": [], "allow_vl_commands": True}
+    assert s.call("Bash", command="vl apply") is None

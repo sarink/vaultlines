@@ -29,7 +29,7 @@ VAULT_PREFIX = "vault-"
 
 
 class Unreachable(Exception):
-    """GitHub couldn't be asked (network, sign-in). Not an answer about access."""
+    """GitHub couldn't be asked (network, login). Not an answer about access."""
 
 
 # ---------------------------------------------------------------- the fake
@@ -89,7 +89,7 @@ def logged_in() -> bool:
 
 
 def scopes() -> set[str]:
-    """What your gh sign-in may do, like {"repo", "workflow"}."""
+    """What your gh login may do, like {"repo", "workflow"}."""
     if _fake_path():
         return {"repo", "workflow"}
     out = run(["gh", "auth", "status", "--hostname", "github.com"], check=False)

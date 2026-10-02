@@ -18,7 +18,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 needs_tools = pytest.mark.skipif(not (shutil.which("rclone") and shutil.which("uv")),
                                  reason="rclone or uv isn't installed")
 VAULT = "mixim-ai/vault-hq"
-SOURCE = {"kind": "gdrive", "shared_drive": "0AHF8p0HI9kM1Uk9PVA", "shared_drive_name": "Mixim HQ", "folder": "",
+SOURCE = {"kind": "gdrive", "shared_drive": "Mixim HQ", "folder": "",
           "max_size": "50M", "google_client_id": "1234-abc.apps.googleusercontent.com",
           "google_client_secret": "GOCSPX-x"}
 
@@ -32,7 +32,7 @@ def test_a_good_source():
 
 @pytest.mark.parametrize("change, problem", [
     ({"shared_drive": 5}, "shared_drive"),
-    ({"shared_drive": "0A B"}, "shared_drive"),
+    ({"shared_drive": "/abs"}, "shared_drive"),
     ({"folder": "/abs"}, "folder"),
     ({"folder": "a/../b"}, "folder"),
     ({"max_size": "lots"}, "max_size"),
@@ -53,7 +53,7 @@ def test_a_local_folder_counts_only_in_tests(monkeypatch):
 
 
 def test_the_rclone_config_holds_the_token_and_the_drive():
-    text = drive.rclone_config(SOURCE, "ya29.ACCESS", "1//REFRESH")
+    text = drive.rclone_config(SOURCE, "0AHF8p0HI9kM1Uk9PVA", "ya29.ACCESS", "1//REFRESH")
     assert "[gdrive]\ntype = drive\nscope = drive.readonly\n" in text
     assert "client_id = 1234-abc.apps.googleusercontent.com\n" in text
     assert "team_drive = 0AHF8p0HI9kM1Uk9PVA\n" in text
@@ -63,14 +63,16 @@ def test_the_rclone_config_holds_the_token_and_the_drive():
     assert drive.remote_path(SOURCE) == "gdrive:"
 
 
-def test_the_workflow_runs_this_version_of_vl_hourly():
+def test_the_fill_job_runs_this_version_of_vl_hourly():
     from vaultlines import __version__
+    from vaultlines.cli import source_workflow
 
-    text = drive.workflow()
+    text = source_workflow(drive)
     assert 'cron: "17 * * * *"' in text
-    assert f'uvx --from "git+https://github.com/sarink/vaultlines@v{__version__}" vl gdrive run' in text
-    assert "VL_GDRIVE_TOKEN: ${{ secrets.VL_GDRIVE_TOKEN }}" in text
-    assert "concurrency: { group: vl-gdrive }" in text
+    assert f'uvx --from "git+https://github.com/sarink/vaultlines@v{__version__}" vl source refresh --here' in text
+    assert "VL_SOURCE_TOKEN: ${{ secrets.VL_SOURCE_TOKEN }}" in text
+    assert "concurrency: { group: vl-source }" in text
+    assert "rclone.org/install.sh" in text  # the kind's own setup steps
 
 
 def test_rclone_runs_without_rclone_variables(monkeypatch):
@@ -137,8 +139,8 @@ def test_changes_update(note_change):
     assert plan[0].note is note
 
 
-def test_rebuild_updates_everything():
-    plan = drive.changes([F("a.pdf", "1")], [N("a.pdf.md", "a.pdf", "1")], rebuild=True)
+def test_force_updates_everything():
+    plan = drive.changes([F("a.pdf", "1")], [N("a.pdf.md", "a.pdf", "1")], force=True)
     assert kinds(plan) == [("update", "a.pdf.md")]
 
 
@@ -180,7 +182,7 @@ def test_paths_vl_never_writes(path):
 def test_frontmatter_round_trip():
     meta = {"title": 'Runway "2025"', "type": "drive-file", "source": "gdrive", "id": "1AbC",
             "path": "Finance/Runway.xlsx", "modified": "2024-12-18T19:43:47Z", "text": "full",
-            "fetch": 'vl gdrive fetch mixim-ai/vault-hq "Finance/Runway.xlsx"'}
+            "fetch": 'vl source fetch mixim-ai/vault-hq "Finance/Runway.xlsx"'}
     text = drive.render_note(meta, [], "## Summary\n| a |\n")
     assert text.startswith('---\ntitle: "Runway \\"2025\\""\ntype: "drive-file"\n')
     parsed, extra, body = drive.parse_note(text)
@@ -215,10 +217,10 @@ def test_kind_of():
 
 
 def test_long_text_is_cut():
-    body, status = drive.cut("line\n" * 100_000, "vl gdrive fetch o/vault-d \"a.pdf\"")
+    body, status = drive.cut("line\n" * 100_000, "vl source fetch o/vault-d \"a.pdf\"")
     assert status == "truncated"
     assert len(body.encode()) < drive.MAX_TEXT + 500
-    assert body.rstrip().endswith('`vl gdrive fetch o/vault-d "a.pdf"`.')
+    assert body.rstrip().endswith('`vl source fetch o/vault-d "a.pdf"`.')
     assert drive.cut("short\n", "x") == ("short\n", "full")
     assert drive.cut("  \n\n", "x")[1] == "no text"
 
@@ -254,8 +256,8 @@ def local_drive(tmp_path, monkeypatch):
     (vault / "readme.md").write_text("# By hand\n")
     source = {**SOURCE, "shared_drive": str(src), "max_size": "200K"}
 
-    def run(rebuild=False):
-        return drive.run(vault, source, VAULT, str(src), None, rebuild=rebuild)
+    def run(force=False):
+        return drive.run(vault, source, VAULT, str(src), None, force=force)
 
     return run, Vault(vault), src
 
@@ -279,7 +281,7 @@ def test_a_run_writes_one_note_per_file(local_drive):
     meta, _, body = note(vault, "Finance/Runway.xlsx.md")
     assert meta["title"] == "Runway" and meta["type"] == "drive-file" and meta["source"] == "gdrive"
     assert meta["path"] == "Finance/Runway.xlsx" and meta["text"] == "full" and meta["converter"] == drive.CONVERTER
-    assert meta["fetch"] == 'vl gdrive fetch mixim-ai/vault-hq "Finance/Runway.xlsx"'
+    assert meta["fetch"] == 'vl source fetch mixim-ai/vault-hq "Finance/Runway.xlsx"'
     assert meta["md5"] and meta["modified"] and "spreadsheetml" in meta["mime"]
     assert "id" not in meta and "url" not in meta  # a local folder has no Drive IDs
     assert "Comptroller" in body  # in the second tab
@@ -292,7 +294,7 @@ def test_a_run_writes_one_note_per_file(local_drive):
     for rel, status in (("archive.zip.md", "not convertible"), ("huge.pdf.md", "too big"), ("blank.txt.md", "no text")):
         meta, _, body = note(vault, rel)
         assert meta["text"] == status, rel
-        assert body.count("\n") == 1 and "vl gdrive fetch mixim-ai/vault-hq" in body
+        assert body.count("\n") == 1 and "vl source fetch mixim-ai/vault-hq" in body
     assert note(vault, "broken.pdf.md")[0]["text"].startswith("failed: ")
     assert (vault.path / "readme.md").read_text() == "# By hand\n"
 
@@ -314,12 +316,12 @@ def test_a_second_run_changes_nothing_then_follows_drive(local_drive):
 
 
 @needs_tools
-def test_rebuild_converts_again_and_keeps_basic_memorys_keys(local_drive):
+def test_force_converts_again_and_keeps_basic_memorys_keys(local_drive):
     run, vault, _ = local_drive
     run()
     path = vault.path / "notes.txt.md"
     path.write_text(path.read_text().replace("---\n\n", "tags:\n- misc\n---\n\n", 1).replace("plain words", "edited"))
-    assert run(rebuild=True) == "0 new, 10 changed, 0 moved, 0 deleted"
+    assert run(force=True) == "0 new, 10 changed, 0 moved, 0 deleted"
     _, extra, body = note(vault, "notes.txt.md")
     assert body == "plain words\n" and extra == ["tags:", "- misc"]
 
@@ -339,7 +341,7 @@ def test_a_move_keeps_the_body_and_basic_memorys_keys(local_drive, monkeypatch):
     assert not (vault.path / "Finance").exists()
     meta, extra, body = note(vault, "Archive/2024 Runway.xlsx.md")
     assert meta["path"] == "Archive/2024 Runway.xlsx" and meta["title"] == "2024 Runway"
-    assert meta["fetch"] == 'vl gdrive fetch mixim-ai/vault-hq "Archive/2024 Runway.xlsx"'
+    assert meta["fetch"] == 'vl source fetch mixim-ai/vault-hq "Archive/2024 Runway.xlsx"'
     assert meta["url"] == "https://drive.google.com/open?id=1RUNWAY"
     assert extra == ["tags:", "- cash"] and body == "edited by BM\n"
 

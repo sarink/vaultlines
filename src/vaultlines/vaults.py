@@ -1,7 +1,7 @@
 """Vaults: git repos of notes, each described by its own vault.toml.
 
 A vault is always written OWNER/REPO, in lowercase: `mixim-ai/vault-public`,
-`kabir/vault-kabir-personal`, `local/recipes`. Its clone is vaults/OWNER/REPO in
+`kabir/vault-kabir-personal`. Its clone is vaults/OWNER/REPO in
 ~/.vaultlines. On GitHub, a vault is a repo whose name starts with `vault-` and that
 has vault.toml at its root:
 
@@ -28,7 +28,6 @@ from .rules import repo_id as remote_id  # noqa: F401 - OWNER/REPO of a git remo
 from .util import vaults_dir
 
 PREFIX = "vault-"
-LOCAL = "local"
 VAULT_FILE = "vault.toml"
 OWNER_RE = r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
 REPO_RE = r"(?!\.\.?$)[a-z0-9._-]+"
@@ -167,7 +166,8 @@ class Vault:
 
     @property
     def local(self) -> bool:
-        return self.owner == LOCAL
+        """On this computer only: not published on GitHub."""
+        return self.remote is None
 
 
 def git_origin(path: Path) -> str | None:
@@ -202,7 +202,7 @@ def _dirs(path: Path) -> list[Path]:
 
 def joined() -> list[str]:
     """Owners you joined: each has a folder in vaults/."""
-    return [p.name for p in _dirs(vaults_dir()) if p.name != LOCAL and re.fullmatch(OWNER_RE, p.name)]
+    return [p.name for p in _dirs(vaults_dir()) if re.fullmatch(OWNER_RE, p.name)]
 
 
 def on_disk() -> dict[str, Vault]:

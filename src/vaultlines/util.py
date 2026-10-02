@@ -59,7 +59,7 @@ def vaults_dir() -> Path:
 
 
 def google_dir() -> Path:
-    """Read-only Google sign-ins for fetching originals. Sessions can't touch it."""
+    """Read-only Google logins for fetching originals. Sessions can't touch it."""
     return vl_home() / "google"
 
 
@@ -69,7 +69,7 @@ def clones_path() -> Path:
 
 
 def fetch_dir(vault_id: str) -> Path:
-    """Where `vl gdrive fetch` puts a Drive vault's originals: cache/fetch/OWNER/REPO."""
+    """Where `vl source fetch` puts the originals of a vault with a source: cache/fetch/OWNER/REPO."""
     return cache_dir() / "fetch" / vault_id
 
 

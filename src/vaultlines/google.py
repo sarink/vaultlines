@@ -1,4 +1,4 @@
-"""Google: read-only sign-in, the token check, and the few Drive API calls vl makes.
+"""Google: read-only login, the token check, and the few Drive API calls vl makes.
 
 Standard library only. vl only ever asks for the `drive.readonly` scope, and checks with
 Google what each token can do before using it: a token that could change Drive is
@@ -89,7 +89,7 @@ def _json(url: str, data: dict | None = None, access: str | None = None) -> dict
         return json.loads(response.read() or b"{}")
 
 
-# ---------------------------------------------------------------- sign-in
+# ---------------------------------------------------------------- login
 
 def _pkce() -> tuple[str, str]:
     verifier = secrets.token_urlsafe(64)
@@ -107,7 +107,7 @@ def _open_browser(url: str) -> None:
 
 
 def login(client_id: str, client_secret: str, timeout: int = LOGIN_TIMEOUT) -> str:
-    """Sign in to Google in the browser with read-only access to Drive (loopback, PKCE).
+    """Log in to Google in the browser with read-only access to Drive (loopback, PKCE).
     Returns the refresh token, after checking with Google that it can only read."""
     got: dict[str, str] = {}
 
@@ -135,7 +135,7 @@ def login(client_id: str, client_secret: str, timeout: int = LOGIN_TIMEOUT) -> s
         "client_id": client_id, "redirect_uri": redirect, "response_type": "code", "scope": SCOPE,
         "access_type": "offline", "prompt": "consent", "code_challenge": challenge,
         "code_challenge_method": "S256", "state": state})
-    print(f"Sign in to Google in your browser (read-only access to Drive). If it didn't open:\n  {url}",
+    print(f"Log in to Google in your browser (read-only access to Drive). If it didn't open:\n  {url}",
           file=sys.stderr)
     _open_browser(url)
     deadline = time.time() + timeout
@@ -145,30 +145,30 @@ def login(client_id: str, client_secret: str, timeout: int = LOGIN_TIMEOUT) -> s
     finally:
         server.server_close()
     if not got:
-        raise VlError("No Google sign-in arrived in time. Try again.")
+        raise VlError("No Google login arrived in time. Try again.")
     if got.get("error") or got.get("state") != state:
-        raise VlError(f"Google sign-in didn't finish ({got.get('error') or 'the reply did not match'}).")
+        raise VlError(f"Google login didn't finish ({got.get('error') or 'the reply did not match'}).")
     try:
         tokens = _json(urls()["token"], {"code": got["code"], "client_id": client_id, "client_secret": client_secret,
                                           "redirect_uri": redirect, "grant_type": "authorization_code",
                                           "code_verifier": verifier})
     except _HTTPError as e:
-        raise VlError(f"Google didn't accept the sign-in (HTTP {e.status}). Check the client ID and secret.") from None
+        raise VlError(f"Google didn't accept the login (HTTP {e.status}). Check the client ID and secret.") from None
     if not tokens.get("refresh_token") or not tokens.get("access_token"):
-        raise VlError("Google didn't send a lasting sign-in. Try again.")
+        raise VlError("Google didn't send a lasting login. Try again.")
     check_read_only(tokens["access_token"])
     return tokens["refresh_token"]
 
 
 def access_token(client_id: str, client_secret: str, refresh_token: str) -> str:
-    """A fresh access token for a saved sign-in."""
+    """A fresh access token for a saved login."""
     try:
         data = _json(urls()["token"], {"client_id": client_id, "client_secret": client_secret,
                                        "refresh_token": refresh_token, "grant_type": "refresh_token"})
     except _HTTPError as e:
-        raise VlError(f"Google didn't accept the saved sign-in (HTTP {e.status}). Sign in again.") from None
+        raise VlError(f"Google didn't accept the saved login (HTTP {e.status}). Log in again.") from None
     if not data.get("access_token"):
-        raise VlError("Google didn't send an access token. Sign in again.")
+        raise VlError("Google didn't send an access token. Log in again.")
     return data["access_token"]
 
 
@@ -181,11 +181,11 @@ def check_read_only(access: str) -> None:
     scopes = str(info.get("scope") or "").split()
     writes = [s for s in scopes if s not in READ_ONLY_SCOPES]
     if writes or not scopes:
-        raise VlError(f"This Google sign-in can change Google Drive (scope: {' '.join(writes) or 'none'}). "
-                      "vl only uses read-only sign-ins.")
+        raise VlError(f"This Google login can change Google Drive (scope: {' '.join(writes) or 'none'}). "
+                      "vl only uses read-only logins.")
 
 
-# ---------------------------------------------------------------- saved sign-ins
+# ---------------------------------------------------------------- saved logins
 
 def token_path(client_id: str) -> Path:
     name = re.sub(r"[^A-Za-z0-9_-]", "_", client_id.removesuffix(".apps.googleusercontent.com"))

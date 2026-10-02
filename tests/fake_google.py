@@ -1,7 +1,7 @@
-"""A fake Google for tests: OAuth sign-in (with PKCE), tokeninfo and the Drive API, on 127.0.0.1.
+"""A fake Google for tests: OAuth login (with PKCE), tokeninfo and the Drive API, on 127.0.0.1.
 
 vl talks to it when VAULTLINES_FAKE_GOOGLE is its address. Its "browser" approves every
-sign-in at once.
+login at once.
 """
 
 from __future__ import annotations

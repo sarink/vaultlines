@@ -20,7 +20,7 @@ VAULTS = {
     "acme-docs": ("acme/vault-docs", {"kind": "everyone"}),
     "acme-sam-personal": ("acme/vault-sam-personal", {"kind": "me"}),
     "acme-drive": ("acme/vault-drive", {"kind": "people", "logins": ["sam", "Lee"]}),
-    "local-recipes": ("local/recipes", {"kind": "me"}),
+    "sam-recipes": ("sam/vault-recipes", {"kind": "me"}),  # on this computer only
 }
 ABOUT = {"acme-everyone": "Notes everyone at Acme can see.", "acme-founders": "Founders' notes: fundraising, hiring.",
          "acme-drive": "The text of every file in the Acme shared drive. Claude only reads it.",
@@ -77,11 +77,11 @@ class World:
                          "notes_from": {"acme/site": "acme-everyone", "acme/app": "acme-everyone",
                                         "acme/legal": "acme-founders"},
                          "conflicts": {"acme/both": ["acme-everyone", "acme-founders"]}},
-                "sam": {"personal": "sam-personal", "vaults": ["sam-personal", "sam-side"], "notes_from": {},
+                "sam": {"personal": "sam-personal", "vaults": ["sam-personal", "sam-recipes", "sam-side"], "notes_from": {},
                         "conflicts": {}},
             },
             "repos": {},
-            "folders": {str(self.writing): {"writes": "local-recipes", "reads": []}},
+            "folders": {str(self.writing): {"writes": "sam-recipes", "reads": []}},
             "default": {"writes": "sam-personal", "reads": []},
             "plugins": {
                 "basic-memory": {

@@ -80,13 +80,14 @@ def _owner(text: str) -> str:
 
 # ---------------------------------------------------------------- vaults on disk
 
-def _new_vault(vault_id: str, about: str) -> Path:
+def _new_vault(vault_id: str, about: str, notes_from=(), source: dict | None = None,
+               comments: dict | None = None) -> Path:
     """A new vault on this computer: a git repo with vault.toml."""
     path = vlt.path_of(vault_id)
     if path.exists() and any(path.iterdir()):
         raise VlError(f"{contract(path)} already exists.")
     path.mkdir(parents=True, exist_ok=True)
-    (path / vlt.VAULT_FILE).write_text(vlt.render_vault_toml(about))
+    (path / vlt.VAULT_FILE).write_text(vlt.render_vault_toml(about, notes_from, source, comments))
     gitsync.init_repo(path)
     return path
 
@@ -122,7 +123,7 @@ def lost(cfg: Config) -> set[str]:
     """Vaults on GitHub that the last check didn't find: you can't access them any more."""
     found = _discovery()
     return {vid for vid, v in cfg.vaults.items()
-            if not v.local and v.remote and v.owner in found and vid not in found[v.owner]["vaults"]}
+            if v.remote and v.owner in found and vid not in found[v.owner]["vaults"]}
 
 
 def _personal_about(owner: str, me: str) -> str:
@@ -153,12 +154,12 @@ def _join(owner: str, me: str) -> list[str]:
 
 
 def _publish(cfg: Config, vault_id: str) -> None:
+    """Put a local vault on GitHub, as a private repo."""
     v = cfg.vault(vault_id)
-    if v.id != vlt.personal_id(v.owner, cfg.me or _me()):
-        raise VlError(f"`vl vault publish` is for only your personal vault, like "
-                      f"{vlt.personal_id(v.owner, cfg.me or _me())}. {v.id} isn't one.")
     if v.remote:
         raise VlError(f"{v.id} is already on GitHub ({v.remote}).")
+    if github.exists(v.id):
+        raise VlError(f"{v.id} already exists on GitHub, so this local vault can't be published under that name.")
     say(f"Creating the private GitHub repo {v.id}")
     github.create_private_repo(v.id, v.path)
     found = _discovery().get(v.owner, {}).get("vaults", [])
@@ -168,6 +169,8 @@ def _publish(cfg: Config, vault_id: str) -> None:
     if a.kind == "people" and others:
         warn(f"GitHub says these people can also see {v.id}: {', '.join(others)} "
              "(organization owners, or the organization's base permission).")
+    else:
+        say(f"Published {v.id}: a private repo that only you can access. Give people access on GitHub.")
 
 
 # ---------------------------------------------------------------- init / org
@@ -180,7 +183,7 @@ REQUIRED = {
 
 
 def cmd_init(args) -> None:
-    basic_memory = not args.no_basic_memory and config.load_file().basic_memory
+    basic_memory = config.load_file().basic_memory
     required = dict(REQUIRED)
     if os.environ.get("VAULTLINES_FAKE_GITHUB"):
         required.pop("gh")
@@ -190,7 +193,7 @@ def cmd_init(args) -> None:
     if missing:
         raise VlError("Install these first:\n" + "\n".join(missing))
     if not github.logged_in():
-        say("Sign in to GitHub. vl uses your account to find the vaults you can access.")
+        say("Log in to GitHub. vl uses your account to find the vaults you can access.")
         subprocess.run(["gh", "auth", "login"])
         if not github.logged_in():
             raise VlError("Not signed in to GitHub. Run `gh auth login`, then `vl init` again.")
@@ -222,10 +225,10 @@ def cmd_init(args) -> None:
 
 
 def cmd_org_join(args) -> None:
-    owner = _owner(args.owner)
+    owner = _owner(args.org)
     if not _initialized():
         say("Setting up vl on this computer first.")
-        cmd_init(argparse.Namespace(publish=False, no_basic_memory=False))
+        cmd_init(argparse.Namespace(publish=False))
     me = _me()
     if owner != me and github.owner_kind(owner) is None:
         raise VlError(f"GitHub has no user or organization named {owner} that you can see.")
@@ -237,13 +240,15 @@ def cmd_org_join(args) -> None:
             shutil.rmtree(vaults_dir() / owner, ignore_errors=True)
         raise
     cfg = config.load()
-    for module in plugins.SOURCES.values():
-        if hasattr(module, "joined"):
-            module.joined(cfg, owner)
     _apply(cfg)
     shorts = cfg.shorts
     say(f"\nJoined {owner}. Its vaults on this computer:")
     _table([(vid, shorts[vid], v.about or "-") for vid, v in sorted(cfg.vaults.items()) if v.owner == owner])
+    for vid, v in sorted(cfg.vaults.items()):
+        kind = plugins.SOURCES.get((v.source or {}).get("kind"))
+        if v.owner == owner and kind and hasattr(kind, "logged_in") and not kind.validate_source(v.source) \
+                and not kind.logged_in(v.source):
+            say(f"\n{vid} holds notes from {kind.NAME}. To fetch originals, run `vl source login {vid}`.")
     say(f"\nRun `claude` in any {owner} repo: vl picks its vaults. See `vl status`.")
 
 
@@ -256,7 +261,7 @@ def _unique(path: Path) -> Path:
 
 
 def cmd_org_leave(args) -> None:
-    owner = _owner(args.owner)
+    owner = _owner(args.org)
     me = _me()
     if owner == me:
         raise VlError("That's your own account. vl always keeps it: your personal vault lives there.")
@@ -281,49 +286,185 @@ def cmd_org_leave(args) -> None:
 
 # ---------------------------------------------------------------- vault create / publish
 
+def _kind(name: str):
+    if name not in plugins.SOURCES:
+        raise VlError(f"There's no source kind {name!r}. Kinds: {', '.join(sorted(plugins.SOURCES))}")
+    return plugins.SOURCES[name]
+
+
 def cmd_vault_create(args) -> None:
     vault_id = args.vault.strip().lower()
     if not vlt.valid_id(vault_id):
-        raise VlError("Give OWNER/vault-NAME, like mixim-ai/vault-design (or local/NAME for this computer only).")
+        raise VlError("Give OWNER/vault-NAME, like mixim-ai/vault-design.")
     owner, repo = vault_id.split("/", 1)
-    about = args.about or ""
-    cfg = config.load()
-    if vault_id in cfg.vaults or vlt.path_of(vault_id).exists():
-        raise VlError(f"{vault_id} is already on this computer.")
-    if owner == vlt.LOCAL:
-        if not config.LOCAL_RE.match(vault_id):
-            raise VlError("Local vault names use lowercase letters, digits and dashes, like local/recipes.")
-        _new_vault(vault_id, about)
-        config.add_local_vault(vault_id)
-        say(f"Made {vault_id} at {contract(vlt.path_of(vault_id))}, on this computer only. "
-            f"It's listed in {contract(config.config_path())}.")
-        _apply(config.load())
-        return
     if not repo.startswith(vlt.PREFIX):
         raise VlError(f"Vault repos start with {vlt.PREFIX}, like {owner}/{vlt.PREFIX}{repo}.")
+    notes_from = []
+    for r in args.notes_from or []:
+        if not vlt.REPO_ID_RE.match(r.strip()):
+            raise VlError(f"--notes_from: {r!r} isn't a repo, written OWNER/REPO.")
+        notes_from.append(r.strip().lower())
+    cfg = config.load()
     if owner not in cfg.owners:
         raise VlError(f"You haven't joined {owner}. Run `vl org join {owner}` first.")
+    if vault_id in cfg.vaults or vlt.path_of(vault_id).exists():
+        raise VlError(f"{vault_id} is already on this computer.")
+    if args.source:
+        return _create_with_source(args, vault_id, notes_from)
+    _new_vault(vault_id, args.about or "", notes_from)
+    say(f"Made {vault_id}, on this computer only.")
+    if args.publish:
+        _publish(config.load(), vault_id)
+    else:
+        say(f"To put it on GitHub: `vl vault publish {vault_id}`")
+    _apply(config.load())
+
+
+WORKFLOW_FILE = "vl-source.yml"
+WORKFLOW = """\
+# Written by vl. The fill job: it fills this vault from its source (__NAME__).
+name: vl source
+on:
+  schedule: [{ cron: "17 * * * *" }]        # hourly; edit to change
+  workflow_dispatch: { inputs: { force: { type: boolean, default: false } } }
+concurrency: { group: vl-source }            # one run at a time
+permissions: { contents: write }
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+__STEPS__      - run: uvx --from "git+https://github.com/sarink/vaultlines@v__VERSION__" vl source refresh --here ${{ inputs.force && '--force' || '' }}
+        env:
+          VL_SOURCE_TOKEN: ${{ secrets.VL_SOURCE_TOKEN }}   # the source's read-only login
+"""
+
+
+def source_workflow(kind) -> str:
+    steps = getattr(kind, "SETUP_STEPS", "").replace("__RCLONE__", getattr(kind, "RCLONE", ""))
+    return WORKFLOW.replace("__NAME__", kind.NAME).replace("__STEPS__", steps).replace("__VERSION__", __version__)
+
+
+def _create_with_source(args, vault_id: str, notes_from: list[str]) -> None:
+    """A vault filled from a source. It's always published: its fill job runs on GitHub."""
+    kind = _kind(args.source)
+    if notes_from:
+        raise VlError("a vault with a source can't take notes, so it has no notes_from.")
+    source = {"kind": args.source, **getattr(kind, "DEFAULTS", {})}
+    source.update({key: getattr(args, key) for key in kind.OPTIONS if getattr(args, key, None) is not None})
+    problems = kind.validate_source(source)
+    if problems:
+        raise VlError("; ".join(problems))
     if github.exists(vault_id):
         raise VlError(f"{vault_id} already exists on GitHub.")
-    path = _new_vault(vault_id, about)
-    say(f"Creating the private GitHub repo {vault_id}")
+    if "workflow" not in github.scopes():
+        raise VlError("Your GitHub login can't add workflow files, and the vault's fill job needs one. "
+                      "Run `gh auth refresh -h github.com -s workflow`, then try again.")
+    source, secret = kind.create(vault_id, source)
+    about = args.about or (kind.default_about(source) if hasattr(kind, "default_about") else "")
+    comments = kind.comments(source) if hasattr(kind, "comments") else None
+    path = vlt.path_of(vault_id)
     try:
+        path.mkdir(parents=True)
+        (path / ".github" / "workflows").mkdir(parents=True)
+        (path / ".github" / "workflows" / WORKFLOW_FILE).write_text(source_workflow(kind))
+        (path / vlt.VAULT_FILE).write_text(vlt.render_vault_toml(about, (), source, comments))
+        gitsync.init_repo(path)
+        say(f"Creating the private GitHub repo {vault_id}")
         github.create_private_repo(vault_id, path)
     except VlError:
         shutil.rmtree(path, ignore_errors=True)
         raise
-    found = _discovery().get(owner, {}).get("vaults", [])
-    _record(owner, [*found, vault_id])
+    github.set_secret(vault_id, "VL_SOURCE_TOKEN", secret)
+    github.run_workflow(vault_id, WORKFLOW_FILE)
+    owner = vault_id.split("/")[0]
+    _record(owner, [*_discovery().get(owner, {}).get("vaults", []), vault_id])
     _apply(config.load())
-    say(f"Made {vault_id}. Give people access to the repo on GitHub; `vl sync` finds it for them.")
-    say(f"To send a repo's notes there, add it to notes_from in {vault_id}'s vault.toml.")
+    say(f"\nMade {vault_id}, filled from {kind.NAME} every hour by its fill job on GitHub.")
+    say(f"The first refresh is starting. Watch it with `gh run watch --repo {vault_id}`.")
+    say("Give people read access to the repo on GitHub; `vl sync` finds it for them.")
 
 
 def cmd_vault_publish(args) -> None:
-    cfg = config.load()
-    _publish(cfg, args.vault)
+    _publish(config.load(), args.vault)
     _apply(config.load())
-    say(f"Published {cfg.vault(args.vault).id}: a private repo that only you can access.")
+
+
+# ---------------------------------------------------------------- source refresh / fetch / login
+
+def _source_vault(ref: str):
+    """(vault, its kind, its [source] table) for a vault with a source."""
+    v = config.load().vault(ref)
+    if v.source is None:
+        raise VlError(f"{v.id} has no source: it isn't filled from anywhere.")
+    kind = _kind(v.source.get("kind"))
+    problems = kind.validate_source(v.source)
+    if problems:
+        raise VlError(f"{v.id}'s vault.toml has problems in [source]: " + "; ".join(problems))
+    return v, kind, v.source
+
+
+def cmd_source_refresh(args) -> None:
+    if args.here:
+        return _refresh_here(args)
+    if not args.vault:
+        raise VlError("Give the vault to refresh, like `vl source refresh mixim-ai/vault-hq`.")
+    v, _, _ = _source_vault(args.vault)
+    github.run_workflow(v.id, WORKFLOW_FILE, {"force": "true"} if args.force else {})
+    what = "Rebuilding every note of" if args.force else "Refreshing"
+    say(f"{what} {v.id} on GitHub. Watch it with `gh run watch --repo {v.id}`.")
+
+
+def _refresh_here(args) -> None:
+    """The fill job: refresh the vault in this clone, commit and push."""
+    root = Path(args.path or ".").resolve()
+    info, _ = vlt.parse_vault_toml((root / vlt.VAULT_FILE).read_text() if (root / vlt.VAULT_FILE).exists() else "")
+    if info.source is None:
+        raise VlError(f"{root / vlt.VAULT_FILE} has no [source].")
+    kind = _kind(info.source.get("kind"))
+    problems = kind.validate_source(info.source)
+    if problems:
+        raise VlError("vault.toml [source]: " + "; ".join(problems))
+    vault_id = (args.vault or os.environ.get("GITHUB_REPOSITORY") or vlt.remote_id(vlt.git_origin(root)) or "").lower()
+    if not vlt.valid_id(vault_id):
+        raise VlError("Can't tell which vault this is. Run it in the vault's clone.")
+    if not gitsync.git(root, "config", "user.email", check=False).stdout.strip():
+        gitsync.git(root, "config", "user.name", "github-actions[bot]")
+        gitsync.git(root, "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com")
+    token = os.environ.get("VL_SOURCE_TOKEN", "").strip()
+    try:
+        status = kind.refresh(root, info.source, vault_id, token, args.force)
+    except VlError:
+        if gitsync.commit(root, f"Partial update from {kind.NAME}"):  # what did arrive is kept
+            _push(root)
+        raise
+    if gitsync.commit(root, f"Update from {kind.NAME}"):
+        _push(root)
+        say(status)
+    else:
+        say(f"no changes ({status})")
+
+
+def _push(root: Path) -> None:
+    if gitsync.remote_url(root) and gitsync.git(root, "push", "-q", "origin", "HEAD", check=False).returncode != 0:
+        raise VlError("couldn't push the notes")
+
+
+def cmd_source_fetch(args) -> None:
+    v, kind, source = _source_vault(args.vault)
+    if not hasattr(kind, "fetch"):
+        raise VlError(f"{kind.NAME} sources have no originals to fetch.")
+    say(str(kind.fetch(v, source, config.load().shorts[v.id], args.path)))
+
+
+def cmd_source_login(args) -> None:
+    v, kind, source = _source_vault(args.vault)
+    if not hasattr(kind, "login"):
+        raise VlError(f"{kind.NAME} sources have no login.")
+    kind.login(v, source)
+    say(f"Logged in to {kind.NAME} for {v.id}, read-only. `vl source fetch` can get originals now.")
 
 
 # ---------------------------------------------------------------- apply
@@ -348,19 +489,9 @@ def write_runtime(cfg: Config, fresh: bool, warnings: list[str] | None = None) -
     return auds, errors
 
 
-def _local_vaults(cfg: Config) -> None:
-    """Make the local vaults listed in config.toml that aren't on disk yet."""
-    for vid in cfg.local:
-        if not vlt.path_of(vid).exists():
-            _new_vault(vid, "")
-            say(f"Made {vid} at {contract(vlt.path_of(vid))}")
-
-
 def _apply(cfg: Config, fresh: bool = True) -> Applied:
     """Make git, the plugins, Claude Code and Obsidian match the vaults and config.toml."""
     warnings: list[str] = []
-    _local_vaults(cfg)
-    cfg = config.load()
     for vid, v in sorted(cfg.vaults.items()):
         warnings += [f"{vid}: vault.toml: {p}" for p in v.problems]
         gitsync.ensure_local_rules(v.path)
@@ -493,10 +624,7 @@ def clean_fetched(max_age: float = 86400) -> int:
 
 def _sync_vault(v: vlt.Vault, stamp) -> str:
     if v.source is not None:
-        source = plugins.SOURCES.get(v.source.get("kind"))
-        if source and hasattr(source, "sync"):
-            return source.sync(v, stamp)
-        return gitsync.pull_keeping_changes(v.path)
+        return gitsync.pull_keeping_changes(v.path)  # its fill job writes it; this computer only reads
     return gitsync.sync(v.path)
 
 
@@ -512,7 +640,8 @@ def cmd_sync(args) -> None:
             say("Another sync is running.")
             return
         stamp = (lambda: time.strftime("%Y-%m-%d %H:%M:%S ")) if args.background else (lambda: "")
-        daily = not only and time.time() - audience.load_state().get("checked_at", 0) >= cfg.check_interval
+        daily = args.check_github or (
+            not only and time.time() - audience.load_state().get("checked_at", 0) >= cfg.check_interval)
         before = _vault_tomls(cfg)
         if daily:
             _check_github(cfg, stamp)
@@ -596,36 +725,6 @@ def _owner_title(owner: str, me: str) -> str:
     return owner
 
 
-def cmd_check(args) -> None:
-    cfg = config.load()
-    auds_by_id, errors = write_runtime(cfg, fresh=True)
-    state = audience.load_state()
-    if not errors:
-        state["checked_at"] = time.time()
-    state["hook_warnings"] = hook_warnings(cfg)
-    audience.save_state(state)
-    me = audience.cached_me()
-    data = runtime.load() or {}
-    shorts = cfg.shorts
-    auds = {shorts[vid]: a for vid, a in auds_by_id.items()}
-    say("Who can see each vault")
-    _table([("vault", "who can see it")] + [(vid, a.describe()) for vid, a in sorted(auds_by_id.items())])
-    say("\nWhere writes will ask")
-    any_line = False
-    for owner, o in sorted((data.get("owners") or {}).items()):
-        targets = sorted({o["personal"], *o["notes_from"].values()} - {None})
-        for w in targets:
-            for line in preview(w, [v for v in o["vaults"] if v != w], auds, me):
-                say(f"  {line}")
-                any_line = True
-    if not any_line:
-        say("  never")
-    for w in state["hook_warnings"]:
-        warn(w)
-    for e in errors:
-        warn(e)
-
-
 def _ago(seconds: float) -> str:
     if seconds < 60:
         return "just now"
@@ -641,13 +740,14 @@ def _vault_state(v: vlt.Vault, gone: set[str]) -> str:
         return "no access on GitHub any more (not synced)"
     if not (v.path.exists() and gitsync.is_repo(v.path)):
         return "MISSING"
+    kind = plugins.SOURCES.get((v.source or {}).get("kind"))
+    if v.source is not None:
+        name = kind.NAME if kind else v.source.get("kind")
+        when = gitsync.git(v.path, "log", "-1", "--format=%cr", f"--grep=Update from {name}", check=False).stdout.strip()
+        return f"filled from {name}, updated {when or 'never'}"
     pending = gitsync.pending_changes(v.path)
-    where = "on GitHub" if v.remote else "this computer only"
-    text = f"{where}, last commit {gitsync.last_commit_age(v.path)}" + (f", {pending} unsaved" if pending else "")
-    source = plugins.SOURCES.get((v.source or {}).get("kind"))
-    if source and hasattr(source, "status"):
-        text = source.status(v)
-    return text
+    where = "published" if v.remote else "this computer only"
+    return f"{where}, last commit {gitsync.last_commit_age(v.path)}" + (f", {pending} unsaved" if pending else "")
 
 
 def cmd_status(args) -> None:
@@ -687,6 +787,14 @@ def cmd_status(args) -> None:
                          "yes" if rule.auto_pull else ""))
         _table(rows)
         say("")
+    shorts_auds = {shorts[vid]: a for vid, a in auds.items()}
+    asks = [line for o in (data.get("owners") or {}).values()
+            for w in sorted({o["personal"], *o["notes_from"].values()} - {None})
+            for line in preview(w, [v for v in o["vaults"] if v != w], shorts_auds, me)]
+    say("Where writes will ask")
+    for line in asks or ["never"]:
+        say(f"  {line}")
+    say("")
     default = (data.get("default") or {}).get("writes")
     say(f"Anywhere else -> {default or 'nothing (run `vl init`)'}")
     hooks = claude.hooks_installed()
@@ -697,7 +805,8 @@ def cmd_status(args) -> None:
     for w in hook_warnings(cfg):
         warn(w)
     checked = audience.load_state().get("checked_at")
-    say(f"Last checked with GitHub: {time.strftime('%Y-%m-%d %H:%M', time.localtime(checked)) if checked else 'never'}")
+    say(f"Last checked with GitHub: {time.strftime('%Y-%m-%d %H:%M', time.localtime(checked)) if checked else 'never'}"
+        " (`vl sync --check-github` checks now)")
     if launchd.supported():
         say(f"Background sync: {'on' if launchd.loaded() else 'OFF (run `vl init`)'}, every {cfg.sync_interval // 60} min")
 
@@ -747,9 +856,20 @@ def cmd_doctor(args) -> None:
     for _, plugin, settings in plugins.configured(cfg):
         if hasattr(plugin, "doctor"):
             plugin.doctor(cfg, settings, check)
-    for module in plugins.SOURCES.values():
-        if hasattr(module, "doctor_sources"):
-            module.doctor_sources(cfg, check)
+    filled = [(vid, v) for vid, v in sorted(cfg.vaults.items()) if v.source is not None]
+    if filled:
+        say("Sources")
+    for vid, v in filled:
+        kind = plugins.SOURCES.get(v.source.get("kind"))
+        if kind is None:
+            check(False, f"{vid}: source kind {v.source.get('kind')!r}", f"vl knows: {', '.join(plugins.SOURCES)}")
+            continue
+        problems = kind.validate_source(v.source)
+        check(not problems, f"{vid}: [source] in vault.toml is complete", "; ".join(problems))
+        if not problems and hasattr(kind, "logged_in"):
+            on = kind.logged_in(v.source)
+            say(f"  {'ok  ' if on else 'note'}  {vid}: " + (f"logged in to {kind.NAME} for fetching" if on
+                                                          else f"not logged in for fetching (`vl source login {vid}`)"))
     say("Claude Code")
     hooks = claude.hooks_installed()
     for event in claude.HOOK_EVENTS:
@@ -778,40 +898,79 @@ def cmd_hook(args) -> None:
 
 # ---------------------------------------------------------------- main
 
-def build_parser() -> argparse.ArgumentParser:
+def _wanted_kind(argv: list[str]) -> str | None:
+    """The KIND in `vl vault create ... --source KIND`, so only that kind's keys become flags."""
+    if argv[:2] != ["vault", "create"]:
+        return None
+    for i, arg in enumerate(argv):
+        if arg == "--source" and i + 1 < len(argv):
+            return argv[i + 1]
+        if arg.startswith("--source="):
+            return arg.split("=", 1)[1]
+    return None
+
+
+def build_parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="vl", description="Notes for Claude Code, shared through GitHub.")
     p.add_argument("--version", action="version", version=f"vaultlines {__version__}")
     sub = p.add_subparsers(dest="command", required=True, metavar="COMMAND")
 
-    s = sub.add_parser("init", help="set up this computer: GitHub sign-in, your personal vault, hooks")
-    s.add_argument("--publish", action="store_true", help="also put your personal vault on GitHub (private)")
-    s.add_argument("--no-basic-memory", action="store_true", help="don't set up Basic Memory")
+    s = sub.add_parser("init", help="set up this computer: GitHub login, your personal vault, hooks")
+    s.add_argument("--publish", action="store_true", help="also publish your personal vault (a private repo)")
     s.set_defaults(func=cmd_init)
 
-    org = sub.add_parser("org", help="join or leave a GitHub organization's vaults")
+    org = sub.add_parser("org", help="join or leave the vaults of a GitHub organization (or user)")
     osub = org.add_subparsers(dest="org_command", required=True, metavar="ACTION")
-    s = osub.add_parser("join", help="get the vaults of a GitHub organization (or user) you can access")
-    s.add_argument("owner")
+    s = osub.add_parser("join", help="get the org's vaults that you can access")
+    s.add_argument("org", metavar="ORG")
     s.set_defaults(func=cmd_org_join)
-    s = osub.add_parser("leave", help="stop syncing an owner's vaults (keeps files unless --delete-files)")
-    s.add_argument("owner")
+    s = osub.add_parser("leave", help="stop using the org's vaults (keeps the files unless --delete-files)")
+    s.add_argument("org", metavar="ORG")
     s.add_argument("--delete-files", action="store_true")
     s.set_defaults(func=cmd_org_leave)
 
     vault = sub.add_parser("vault", help="create or publish a vault")
     vsub = vault.add_subparsers(dest="vault_command", required=True, metavar="ACTION")
-    s = vsub.add_parser("create", help="a new private vault repo with vault.toml (or local/NAME)")
-    s.add_argument("vault", metavar="OWNER/vault-NAME")
-    s.add_argument("--about", help="one line about the vault, for Claude")
+    kinds = ", ".join(sorted(plugins.SOURCES))
+    s = vsub.add_parser("create", help="a new vault, on this computer until you publish it",
+                        epilog=f"Source kinds: {kinds}. For a kind's keys: vl vault create --source KIND --help")
+    s.add_argument("vault", metavar="VAULT", nargs="?", help="OWNER/vault-NAME")
+    s.add_argument("--about", metavar="TEXT", help="one line about the vault, for Claude")
+    s.add_argument("--notes_from", metavar="REPO", action="append", help="a repo whose notes go here (OWNER/REPO); "
+                   "give it again for more")
+    s.add_argument("--publish", action="store_true", help="also publish it (a private repo on GitHub)")
+    s.add_argument("--source", metavar="KIND", help=f"fill the vault from a source ({kinds}). The vault is "
+                   "published, and its fill job runs on GitHub")
+    kind = plugins.SOURCES.get(_wanted_kind(argv or []))
+    if kind is not None:
+        group = s.add_argument_group(f"{_wanted_kind(argv)} source: each key goes into [source] in vault.toml")
+        for key, text in kind.OPTIONS.items():
+            group.add_argument(f"--{key}", metavar="VALUE", help=text)
     s.set_defaults(func=cmd_vault_create)
-    s = vsub.add_parser("publish", help="put your local personal vault on GitHub, private")
-    s.add_argument("vault", metavar="OWNER/vault-ME-personal")
+    s = vsub.add_parser("publish", help="publish a vault: a private repo on GitHub")
+    s.add_argument("vault", metavar="VAULT")
     s.set_defaults(func=cmd_vault_publish)
-    s = vsub.add_parser("list", help="same as `vl status`")
-    s.set_defaults(func=cmd_status)
 
-    s = sub.add_parser("sync", help="sync vaults now (and once a day, ask GitHub for new vaults)")
-    s.add_argument("vault", nargs="?", help="only this vault")
+    source = sub.add_parser("source", help="vaults filled from a source")
+    ssub = source.add_subparsers(dest="source_command", required=True, metavar="ACTION")
+    s = ssub.add_parser("refresh", help="start the vault's fill job on GitHub now")
+    s.add_argument("vault", metavar="VAULT", nargs="?")
+    s.add_argument("--force", action="store_true", help="rebuild every note from scratch")
+    s.add_argument("--here", action="store_true", help=argparse.SUPPRESS)  # the fill job itself
+    s.add_argument("--path", help=argparse.SUPPRESS)
+    s.set_defaults(func=cmd_source_refresh)
+    s = ssub.add_parser("fetch", help="fetch one original into the fetch folder and print where it is")
+    s.add_argument("vault", metavar="VAULT")
+    s.add_argument("path", metavar="PATH", help="the `path` from the note's frontmatter")
+    s.set_defaults(func=cmd_source_fetch)
+    s = ssub.add_parser("login", help="log in to the vault's source again, for fetching")
+    s.add_argument("vault", metavar="VAULT")
+    s.set_defaults(func=cmd_source_login)
+
+    s = sub.add_parser("sync", help="sync vaults now (and once a day, check with GitHub)")
+    s.add_argument("vault", metavar="VAULT", nargs="?", help="only this vault")
+    s.add_argument("--check-github", action="store_true", help="check with GitHub now: new vaults, lost ones, "
+                   "who can see each vault")
     s.add_argument("--background", action="store_true", help=argparse.SUPPRESS)
     s.set_defaults(func=cmd_sync)
 
@@ -819,18 +978,17 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--limit", type=int, default=20)
     s.set_defaults(func=cmd_sessions)
 
-    sub.add_parser("check", help="ask GitHub who can see each vault, and show where writes will ask").set_defaults(func=cmd_check)
+    sub.add_parser("status", help="vaults by org, who can see each one, where writes will ask").set_defaults(func=cmd_status)
     sub.add_parser("apply", help="set up git, Basic Memory and Claude Code again").set_defaults(func=cmd_apply)
-    sub.add_parser("status", help="show vaults by owner, your changes, hooks and sync").set_defaults(func=cmd_status)
     sub.add_parser("doctor", help="check that everything is set up").set_defaults(func=cmd_doctor)
     sub.add_parser("uninstall", help="remove the hooks and stop background sync").set_defaults(func=cmd_uninstall)
     sub.add_parser("hook", help=argparse.SUPPRESS).set_defaults(func=cmd_hook)
-    plugins.add_commands(sub)
     return p
 
 
 def main(argv: list[str] | None = None) -> None:
-    args = build_parser().parse_args(argv)
+    argv = sys.argv[1:] if argv is None else argv
+    args = build_parser(argv).parse_args(argv)
     try:
         args.func(args)
     except VlError as e:

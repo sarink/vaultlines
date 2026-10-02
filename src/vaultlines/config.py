@@ -15,10 +15,9 @@ from . import vaults as vlt
 from .util import VlError, contract, expand, vl_home
 
 SETTINGS = {"sync_interval": 600, "check_interval": 86400, "on_leak": "ask", "basic_memory": True}
-RULE_KEYS = {"writes", "reads", "auto_pull"}
+RULE_KEYS = {"writes", "reads", "auto_pull", "allow_vl_commands"}
 FOLDER_KEYS = {"writes", "reads"}
 ON_LEAK = ("ask", "block")
-LOCAL_RE = re.compile(r"^local/[a-z0-9][a-z0-9-]*$")
 REPO_KEY_RE = re.compile(r"^[A-Za-z0-9-]+/(?:\*|[A-Za-z0-9._-]+)$")
 
 TEMPLATE = """\
@@ -31,16 +30,16 @@ TEMPLATE = """\
 # on_leak        = "ask"    # or "block"
 # basic_memory   = true     # false: don't set up Basic Memory
 
-# ---------------------------------------------------------------- local vaults
-# Vaults on this computer only, with no GitHub repo. They live in ~/.vaultlines/vaults/local/.
-# [vaults."local/recipes"]
-
 # ---------------------------------------------------------------- repos
 # Change the rules for one repo, wherever it is cloned.
 # [repos."mixim-ai/postal"]
 # writes    = "mixim-ai/vault-public"
-# reads     = ["local/recipes"]            # added to the owner's vaults
+# reads     = ["kabir/vault-recipes"]      # added to the owner's vaults
 # auto_pull = true                         # `git pull --ff-only` it on every sync
+#
+# Let sessions in a repo run vl commands without asking (for working on vl itself):
+# [repos."sarink/vaultlines"]
+# allow_vl_commands = true
 #
 # Let Claude read another owner's vault in every mixim-ai repo (owners are kept apart by default):
 # [repos."mixim-ai/*"]
@@ -49,7 +48,7 @@ TEMPLATE = """\
 # ---------------------------------------------------------------- folders
 # For folders that aren't in a repo of an owner you joined.
 # [folders."~/Documents/writing"]
-# writes = "local/recipes"
+# writes = "kabir/vault-recipes"
 """
 BASIC_MEMORY_LINE = "# basic_memory   = true     # false: don't set up Basic Memory"
 
@@ -65,6 +64,7 @@ class Rule:
     writes: str | None = None
     reads: list[str] = field(default_factory=list)
     auto_pull: bool = False
+    allow_vl_commands: bool = False  # sessions here may run vl commands without asking
 
 
 @dataclass
@@ -73,7 +73,6 @@ class Config:
     check_interval: int = SETTINGS["check_interval"]
     on_leak: str = SETTINGS["on_leak"]
     basic_memory: bool = SETTINGS["basic_memory"]
-    local: list[str] = field(default_factory=list)  # [vaults."local/NAME"]
     repos: dict[str, Rule] = field(default_factory=dict)  # OWNER/REPO or OWNER/* -> rule
     folders: dict[str, Rule] = field(default_factory=dict)  # absolute folder -> rule
     # What's on disk (filled by load()):
@@ -142,14 +141,16 @@ def _rule(key: str, table: dict, where: str, allowed: set[str]) -> Rule:
     writes = _vault_ref(table["writes"], f"{where}.writes") if "writes" in table else None
     reads = table.get("reads", [])
     if not isinstance(reads, list):
-        raise _err(f"{where}.reads", 'should be a list of vaults, like ["local/recipes"]')
+        raise _err(f"{where}.reads", 'should be a list of vaults, like ["kabir/vault-recipes"]')
     reads = list(dict.fromkeys(_vault_ref(r, f"{where}.reads") for r in reads))
     if writes and writes in reads:
         raise _err(f"{where}.reads", f"'{writes}' is the vault notes are saved to here, so it can't also be in reads")
-    auto_pull = table.get("auto_pull", False)
-    if not isinstance(auto_pull, bool):
-        raise _err(f"{where}.auto_pull", "should be true or false")
-    return Rule(key, writes, reads, auto_pull)
+    flags = {}
+    for flag in ("auto_pull", "allow_vl_commands"):
+        flags[flag] = table.get(flag, False)
+        if not isinstance(flags[flag], bool):
+            raise _err(f"{where}.{flag}", "should be true or false")
+    return Rule(key, writes, reads, **flags)
 
 
 def load_file() -> Config:
@@ -161,7 +162,7 @@ def load_file() -> Config:
         data = tomllib.loads(path.read_text())
     except tomllib.TOMLDecodeError as e:
         raise VlError(f"{contract(path)}: {e}") from None
-    _no_unknown_keys(data, {*SETTINGS, "vaults", "repos", "folders"}, "")
+    _no_unknown_keys(data, {*SETTINGS, "repos", "folders"}, "")
 
     cfg = Config(
         sync_interval=_int(data.get("sync_interval", SETTINGS["sync_interval"]), "sync_interval"),
@@ -173,15 +174,6 @@ def load_file() -> Config:
         raise _err("on_leak", f'should be "ask" or "block", not {cfg.on_leak!r}')
     if not isinstance(cfg.basic_memory, bool):
         raise _err("basic_memory", "should be true or false")
-
-    for vault_id, table in _table(data.get("vaults", {}), "vaults").items():
-        key = f'vaults."{vault_id}"'
-        _no_unknown_keys(_table(table, key), set(), key)
-        if not vault_id.startswith("local/"):
-            raise _err(key, "only local/NAME vaults go here. Vaults on GitHub come from `vl org join OWNER`.")
-        if not LOCAL_RE.match(vault_id):
-            raise _err(key, "local vault names use lowercase letters, digits and dashes, like local/recipes")
-        cfg.local.append(vault_id)
 
     for repo, table in _table(data.get("repos", {}), "repos").items():
         key = f'repos."{repo}"'
@@ -248,17 +240,3 @@ def set_setting(key: str, value: str) -> None:
         text = text[:at] + line + "\n" + ("\n" if first else "") + text[at:]
     path.write_text(text)
     load_file()  # still valid
-
-
-def append(text: str) -> None:
-    """Add tables at the end of config.toml, keeping everything already there."""
-    path = config_path()
-    write_template()
-    before = path.read_text()
-    path.write_text(before.rstrip("\n") + "\n\n" + text.strip("\n") + "\n")
-
-
-def add_local_vault(vault_id: str) -> None:
-    if vault_id in load_file().local:
-        return
-    append(f'[vaults."{vault_id}"]')

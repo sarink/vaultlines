@@ -12,7 +12,7 @@ vl org join mixim-ai
 cd ~/code/marketing && claude
 ```
 
-That's all. `vl org join` signs you in to GitHub (if needed), finds the `mixim-ai` vaults you can access, and clones them. It also sets up Claude Code, Basic Memory and a background sync.
+That's all. `vl org join` logs you in to GitHub (if needed), finds the `mixim-ai` vaults you can access, and clones them. It also sets up Claude Code, Basic Memory and a background sync.
 
 ## How vl picks the vaults for a session
 
@@ -51,7 +51,7 @@ At the start of each session, `vl` tells Claude where to save notes:
 
 ## Vaults
 
-A vault is a GitHub repo whose name starts with `vault-`, with a file `vault.toml` at its root:
+A vault is a repo of notes named `OWNER/vault-NAME`, with a file `vault.toml` at its root:
 
 ```toml
 # mixim-ai/vault-public : vault.toml
@@ -59,28 +59,49 @@ about      = "Notes everyone at Mixim can see."
 notes_from = ["mixim-ai/marketing", "mixim-ai/studio"]   # repos whose notes go here
 ```
 
-Who can use a vault is who can access its repo on GitHub. To give someone a vault, give them access to the repo. They get it on their next `vl sync`.
-
-Make a new vault (for admins):
+A new vault is **local**: it is on your computer only. When you **publish** it, it becomes a private repo on GitHub.
 
 ```bash
-vl vault create mixim-ai/vault-design --about "Design notes."
+vl vault create mixim-ai/vault-design --about "Design notes." --notes_from mixim-ai/studio
+vl vault publish mixim-ai/vault-design          # or add --publish to vault create
 ```
 
-**Personal vaults.** Each owner you join has a personal vault for you: `mixim-ai/vault-kabir-personal`. `vl` makes it on your computer only. To put it on GitHub, as a private repo:
+The flags of `vault create` are the keys of `vault.toml`: `--about`, `--notes_from` (give it again for each repo).
+
+Who can use a published vault is who can access its repo on GitHub. To give someone a vault, give them access to the repo. They get it on their next `vl sync`.
+
+**Personal vaults.** For each org you join, you have a personal vault: `mixim-ai/vault-kabir-personal`. Like any new vault, it stays on your computer until you publish it. In an organization, the org's owners can see every published vault.
+
+## Sources
+
+A vault can be filled from a **source**, like a Google Drive shared drive. It then holds one note for each file in the source: the file's text, and where the original is. Its **fill job**, a GitHub Action, refreshes it every hour. In Claude sessions, the vault is read-only.
+
+Make a vault with a source (for admins, once, on any computer):
 
 ```bash
-vl vault publish mixim-ai/vault-kabir-personal
+vl vault create mixim-ai/vault-hq --source gdrive --shared_drive "Mixim HQ" \
+  --google_client_id 1234-abc.apps.googleusercontent.com --google_client_secret GOCSPX-...
 ```
 
-Anyone with access to a published personal vault gets it. In an organization, its owners can always see it.
+After `--source KIND`, each flag is a key of the `[source]` table in `vault.toml`, spelled the same. `vl vault create --source KIND --help` lists them. A vault with a source is always published, because its fill job runs on GitHub.
 
-**Local vaults** stay on your computer, with no GitHub repo: `vl vault create local/recipes`.
+| Command | What it does |
+|---|---|
+| `vl source refresh VAULT` | Start the fill job now. `--force` rebuilds every note from scratch. |
+| `vl source fetch VAULT PATH` | Fetch one original. Claude runs this when a note isn't enough. |
+| `vl source login VAULT` | Log in to the source again, for fetching. |
 
-## Google Drive vaults
+### Kind `gdrive`: a Google Drive shared drive
 
-A Drive vault holds one note for each file in a shared drive: the file's text, and a link to the original.
-A GitHub Action fills it every hour, signed in as a bot account that can only read the drive. In Claude sessions, the vault is read-only.
+| Key | What it is |
+|---|---|
+| `shared_drive` | The shared drive's name (or ID). |
+| `folder` | Only this folder of the drive. Default: the whole drive. |
+| `max_size` | Bigger files get a note without text. Default: `"50M"`. |
+| `google_client_id` | The client ID of a Google OAuth app of type "Desktop". |
+| `google_client_secret` | Its secret. Google doesn't treat a desktop app's secret as secret. |
+
+`vl vault create` asks you to log in as a **bot account**: a Google account that is a member of the shared drive only. It checks that the login can only read Drive.
 
 A note looks like this:
 
@@ -89,43 +110,35 @@ A note looks like this:
 title: "Runway"
 path: "Finance/Runway.xlsx"
 text: "full"
-fetch: "vl gdrive fetch mixim-ai/vault-hq \"Finance/Runway.xlsx\""
+fetch: "vl source fetch mixim-ai/vault-hq \"Finance/Runway.xlsx\""
 ---
 | Month | Cash | ...
 ```
 
-To get the original file, Claude runs the `fetch` command. `vl` asks you to sign in to Google once, with read-only access. The copy goes to `~/.vaultlines/cache/fetch/` and is deleted after a day. You only get files that your Google account can open.
-
-Set one up (for admins, once, on any computer):
-
-```bash
-vl gdrive add mixim-ai/vault-hq --shared-drive "Mixim HQ" \
-  --client-id 1234-abc.apps.googleusercontent.com --client-secret GOCSPX-...
-```
-
-This asks you to sign in as the bot account, checks that it can only read, and creates the repo with its `vault.toml` and workflow. Then it starts the first run. `vl gdrive rebuild mixim-ai/vault-hq` writes every note again.
+To fetch an original, `vl` asks you to log in to Google once, with read-only access. The copy goes to `~/.vaultlines/cache/fetch/` and is deleted after a day. You only get files that your own Google account can open.
 
 ## Your config.toml
 
 `~/.vaultlines/config.toml` holds only your own changes. `vl` works without any. Run `vl apply` after editing.
 
 ```toml
-# Vaults on this computer only.
-[vaults."local/recipes"]
-
 # Change the rules for one repo, wherever it is cloned.
 [repos."mixim-ai/postal"]
 writes    = "mixim-ai/vault-public"
-reads     = ["local/recipes"]          # added to the owner's vaults
+reads     = ["kabir/vault-recipes"]    # added to the owner's vaults
 auto_pull = true                       # `git pull --ff-only` it on every sync
 
 # Let Claude read another owner's vault in every mixim-ai repo.
 [repos."mixim-ai/*"]
 reads = ["kabir/vault-side"]
 
-# For folders that aren't in a repo of an owner you joined.
+# Let sessions in a repo run vl commands without asking (for working on vl itself).
+[repos."sarink/vaultlines"]
+allow_vl_commands = true
+
+# For folders that aren't in a repo of an org you joined.
 [folders."~/Documents/writing"]
-writes = "local/recipes"
+writes = "kabir/vault-recipes"
 ```
 
 Settings go at the top of the file: `sync_interval` (600 seconds), `check_interval` (86400), `on_leak` (`"ask"` or `"block"`), `basic_memory` (`true`).
@@ -139,7 +152,7 @@ Settings go at the top of the file: `sync_interval` (600 seconds), `check_interv
 
 Example: Claude reads `mixim-ai/vault-private` (Kabir and Jorge). Then it wants to write to `mixim-ai/vault-public` (everyone at Mixim). `vl` asks: "This session read mixim-ai-private. ana and raj would see this in mixim-ai-public."
 
-`vl` also protects itself. Claude can't write its records or touch your Google sign-in. Changes to `config.toml`, and commands like `vl org` or `vl apply`, ask first unless your message mentions vl.
+`vl` also protects itself. Claude can't write its records or touch your Google login. Changes to `config.toml`, and commands like `vl org` or `vl apply`, ask first unless your message mentions vl (or the repo has `allow_vl_commands = true`).
 
 Limits, honestly:
 
@@ -156,8 +169,7 @@ Limits, honestly:
     kabir/vault-kabir-personal/
     mixim-ai/                 exists = joined
       vault-public/  vault-private/  vault-hq/  vault-kabir-personal/
-    local/recipes/
-  google/                     your read-only Google sign-in, for fetching
+  google/                     your read-only Google login, for fetching
   state/                      runtime.json, sessions/, state.json, sync.log
   cache/fetch/                fetched originals, deleted after a day
 ```
@@ -168,16 +180,19 @@ Limits, honestly:
 
 | Command | What it does |
 |---|---|
-| `vl org join OWNER` | Get the vaults of a GitHub organization or user. Runs `vl init` first if needed. |
-| `vl org leave OWNER` | Stop using an owner's vaults. Files move to `~/.vaultlines/left/` (or `--delete-files`). |
-| `vl init [--publish]` | Set up this computer: GitHub sign-in, your personal vault, hooks, sync. |
-| `vl vault create OWNER/vault-NAME` | A new private vault repo with `vault.toml`. |
-| `vl vault publish OWNER/vault-ME-personal` | Put your personal vault on GitHub, private. |
-| `vl gdrive add` / `fetch` / `login` / `rebuild` | Google Drive vaults (see above). |
-| `vl sync` | Sync now. Once a day it also asks GitHub for new vaults. |
-| `vl status`, `vl check`, `vl doctor` | What's set up; who can see each vault; what's broken. |
+| `vl init [--publish]` | Set up this computer: GitHub login, your personal vault, hooks, sync. `--publish` also publishes your personal vault. |
+| `vl org join ORG` | Get the vaults of a GitHub organization (or user) that you can access. Runs `vl init` first if needed. |
+| `vl org leave ORG` | Stop using an org's vaults. Files move to `~/.vaultlines/left/` (or `--delete-files`). |
+| `vl vault create VAULT` | A new vault, on this computer. `--about`, `--notes_from`, `--publish`, `--source KIND`. |
+| `vl vault publish VAULT` | Put a local vault on GitHub, as a private repo. |
+| `vl source refresh` / `fetch` / `login` | Vaults with a source (see above). |
+| `vl sync [VAULT]` | Sync now. Once a day, it also checks with GitHub (`--check-github`: now). |
+| `vl status` | Vaults by org, who can see each one, and where writes will ask. |
+| `vl doctor` | What's broken, and how to fix it. |
 | `vl apply` | Set everything up again, after editing `config.toml`. |
 | `vl sessions` | Recent sessions and what they read. |
 | `vl uninstall` | Remove the hooks and stop the sync. Notes stay. |
+
+A `VAULT` is always `OWNER/vault-NAME`, or its short name (`mixim-ai-public`).
 
 More details: [docs/reference.md](docs/reference.md).

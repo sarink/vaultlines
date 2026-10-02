@@ -78,7 +78,10 @@ def _rule(cfg: Config, rule, where: str, lost: set[str], warnings: list[str]) ->
                         f"{cfg.vaults[rule.writes].source.get('kind')}, so notes can't be saved there. Put it in reads.")
         writes = None
     reads = [s for s in (ref(r, "reads") for r in rule.reads) if s]
-    return {"writes": writes, "reads": reads}
+    out = {"writes": writes, "reads": reads}
+    if getattr(rule, "allow_vl_commands", False):
+        out["allow_vl_commands"] = True
+    return out
 
 
 def build(cfg: Config, auds: dict[str, Audience], plugin_data: dict[str, dict],

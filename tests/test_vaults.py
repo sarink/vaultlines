@@ -101,17 +101,17 @@ def test_on_disk(tmp_path, monkeypatch):
     _repo(root / "mixim-ai" / "vault-public", "https://github.com/mixim-ai/vault-public.git")
     (root / "mixim-ai" / "vault-public" / "vault.toml").write_text('about = "Everyone."\nnotes_from = ["mixim-ai/x"]\n')
     _repo(root / "mixim-ai" / "vault-kabir-personal")
-    _repo(root / "local" / "recipes")
+    _repo(root / "kabir" / "vault-recipes")
     (root / "mixim-ai" / "not-a-repo").mkdir()
     (root / "empty-owner").mkdir()
     (root / ".DS_Store").write_text("")
     found = vaults.on_disk()
-    assert sorted(found) == ["local/recipes", "mixim-ai/vault-kabir-personal", "mixim-ai/vault-public"]
+    assert sorted(found) == ["kabir/vault-recipes", "mixim-ai/vault-kabir-personal", "mixim-ai/vault-public"]
     public = found["mixim-ai/vault-public"]
     assert (public.owner, public.repo, public.about, public.notes_from) == ("mixim-ai", "vault-public", "Everyone.", ["mixim-ai/x"])
     assert public.remote == "https://github.com/mixim-ai/vault-public.git"
     assert found["mixim-ai/vault-kabir-personal"].remote is None
-    assert vaults.joined() == ["empty-owner", "mixim-ai"]
+    assert vaults.joined() == ["empty-owner", "kabir", "mixim-ai"]
 
 
 def test_personal_id():

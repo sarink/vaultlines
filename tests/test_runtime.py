@@ -21,21 +21,21 @@ def make(tmp_path, monkeypatch) -> Config:
     add("mixim-ai/vault-private", "Founders.", ["mixim-ai/jorge-ip-theft", "mixim-ai/studio"])
     add("mixim-ai/vault-hq", "Drive.", ["mixim-ai/hq-notes"], source={"kind": "gdrive"})
     add("mixim-ai/vault-kabir-personal", remote=False)
-    add("local/recipes", remote=False)
+    add("kabir/vault-recipes", remote=False)
     return cfg
 
 
 def test_build_v4(tmp_path, monkeypatch):
     cfg = make(tmp_path, monkeypatch)
-    cfg.repos["mixim-ai/postal"] = Rule("mixim-ai/postal", "mixim-ai/vault-public", ["local/recipes"], True)
-    cfg.folders[str(tmp_path / "writing")] = Rule(str(tmp_path / "writing"), "local/recipes", [])
+    cfg.repos["mixim-ai/postal"] = Rule("mixim-ai/postal", "mixim-ai/vault-public", ["kabir/vault-recipes"], True)
+    cfg.folders[str(tmp_path / "writing")] = Rule(str(tmp_path / "writing"), "kabir/vault-recipes", [])
     warnings = []
     auds = {"mixim-ai/vault-public": Audience("people", ("kabir", "ana"))}
     data = {"basic-memory": {"plugin": True, "projects": {}}}
     out = runtime.build(cfg, auds, data, warnings=warnings)
     assert out["version"] == runtime.VERSION == 4
     assert out["me"] == "kabir"
-    assert sorted(out["vaults"]) == ["kabir-personal", "local-recipes", "mixim-ai-hq", "mixim-ai-kabir-personal",
+    assert sorted(out["vaults"]) == ["kabir-personal", "kabir-recipes", "mixim-ai-hq", "mixim-ai-kabir-personal",
                                      "mixim-ai-private", "mixim-ai-public"]
     public = out["vaults"]["mixim-ai-public"]
     assert public["id"] == "mixim-ai/vault-public" and public["about"] == "Everyone."
@@ -52,10 +52,10 @@ def test_build_v4(tmp_path, monkeypatch):
     assert mixim["vaults"] == ["mixim-ai-hq", "mixim-ai-kabir-personal", "mixim-ai-private", "mixim-ai-public"]
     assert mixim["notes_from"] == {"mixim-ai/jorge-ip-theft": "mixim-ai-private", "mixim-ai/marketing": "mixim-ai-public"}
     assert mixim["conflicts"] == {"mixim-ai/studio": ["mixim-ai-private", "mixim-ai-public"]}
-    assert out["owners"]["kabir"] == {"personal": "kabir-personal", "vaults": ["kabir-personal"],
+    assert out["owners"]["kabir"] == {"personal": "kabir-personal", "vaults": ["kabir-personal", "kabir-recipes"],
                                       "notes_from": {}, "conflicts": {}}
-    assert out["repos"] == {"mixim-ai/postal": {"writes": "mixim-ai-public", "reads": ["local-recipes"]}}
-    assert out["folders"] == {str(tmp_path / "writing"): {"writes": "local-recipes", "reads": []}}
+    assert out["repos"] == {"mixim-ai/postal": {"writes": "mixim-ai-public", "reads": ["kabir-recipes"]}}
+    assert out["folders"] == {str(tmp_path / "writing"): {"writes": "kabir-recipes", "reads": []}}
     assert out["default"] == {"writes": "kabir-personal", "reads": []}
     assert out["plugins"]["basic-memory"]["tool_prefixes"] == ["mcp__basic-memory__"]
     assert any("kabir/blog, which belongs to another owner" in w for w in warnings)
@@ -89,3 +89,10 @@ def test_stale(tmp_path, monkeypatch):
     assert "another version" in runtime.stale({"version": 3})
     Path(tmp_path / "config.toml").write_text("")
     assert "config.toml changed" in runtime.stale({"version": runtime.VERSION, "written_at": 0})
+
+
+def test_allow_vl_commands_is_in_the_repos_entry(tmp_path, monkeypatch):
+    cfg = make(tmp_path, monkeypatch)
+    cfg.repos["kabir/vaultlines"] = Rule("kabir/vaultlines", allow_vl_commands=True)
+    out = runtime.build(cfg, {}, {})
+    assert out["repos"]["kabir/vaultlines"] == {"writes": None, "reads": [], "allow_vl_commands": True}
