@@ -115,6 +115,32 @@ def say(message: str = "") -> None:
     print(message)
 
 
+def interactive() -> bool:
+    """Can vl ask questions? Only with a person at a terminal."""
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def ask(question: str, choices: list[str] | None = None) -> str:
+    """Ask until the answer isn't empty. With `choices`, the answer is one of them,
+    given by its number or its text."""
+    if choices:
+        for i, choice in enumerate(choices, 1):
+            print(f"  {i}. {choice}")
+    while True:
+        try:
+            answer = input(f"{question}: ").strip()
+        except EOFError:
+            raise VlError("Stopped: no answer.") from None
+        if choices:
+            if answer.isdigit() and 1 <= int(answer) <= len(choices):
+                return choices[int(answer) - 1]
+            if answer in choices:
+                return answer
+            print(f"Give a number from 1 to {len(choices)}.")
+        elif answer:
+            return answer
+
+
 def warn(message: str) -> None:
     print(f"warning: {message}", file=sys.stderr)
 

@@ -108,12 +108,83 @@ def test_help_for_a_kind_lists_only_its_keys(capsys):
     assert "--shared_drive" not in out and "--source KIND" in out and "gdrive" in out
 
 
+def test_help_for_a_kind_says_how_to_get_what_it_needs(capsys):
+    assert vl("vault", "create", "--source", "gdrive", "--help") == 0
+    out = capsys.readouterr().out
+    assert "console.cloud.google.com/auth/clients" in out and "Desktop app" in out and "bot account" in out
+
+
+@pytest.fixture
+def answers(monkeypatch):
+    """A terminal that answers vl's questions in turn; `asked` gets each question."""
+    from vaultlines import util
+
+    given, asked = [], []
+
+    def fake_input(question=""):
+        asked.append(question)
+        if not given:
+            raise AssertionError(f"vl asked one question too many: {question!r}")
+        return given.pop(0)
+
+    monkeypatch.setattr(util, "interactive", lambda: True)
+    monkeypatch.setattr("builtins.input", fake_input)
+    return given, asked
+
+
+def test_create_without_a_terminal_says_what_is_missing_and_how_to_get_it(fake_github, computer, google_fake,
+                                                                          monkeypatch, capsys):
+    from vaultlines import util
+
+    fake_github.org("mixim-ai", ["alice"])
+    vl("org", "join", "mixim-ai")
+    monkeypatch.setattr(util, "interactive", lambda: False)
+    assert vl("vault", "create", "mixim-ai/vault-hq", "--source", "gdrive") == 1
+    err = capsys.readouterr().err
+    assert "--shared_drive" in err and "--google_client_id" in err and "--google_client_secret" in err
+    assert "console.cloud.google.com/auth/clients" in err  # how to get them
+    assert google_fake.requests == [] and "mixim-ai/vault-hq" not in fake_github.load()["repos"]
+
+
+def test_create_asks_for_what_is_missing(fake_github, computer, google_fake, answers, capsys):
+    fake_github.org("mixim-ai", ["alice"])
+    vl("org", "join", "mixim-ai")
+    given, asked = answers
+    given += [CLIENT, "GOCSPX-x", "1"]  # the first shared drive the bot can open
+    assert vl("vault", "create", "mixim-ai/vault-hq", "--source", "gdrive") == 0
+    out = capsys.readouterr().out
+    assert "console.cloud.google.com/auth/clients" in out  # the steps, before the questions
+    assert "google_client_id" in asked[0] and "google_client_secret" in asked[1] and "shared_drive" in asked[2]
+    assert "1. Mixim HQ" in out and "2. Other" in out
+    info = vaults.read("mixim-ai/vault-hq", vaults_dir() / "mixim-ai" / "vault-hq").info
+    assert info.source["shared_drive"] == "Mixim HQ"
+    assert (info.source["google_client_id"], info.source["google_client_secret"]) == (CLIENT, "GOCSPX-x")
+
+
+def test_create_asks_again_for_a_bad_answer(fake_github, computer, google_fake, answers, capsys):
+    fake_github.org("mixim-ai", ["alice"])
+    vl("org", "join", "mixim-ai")
+    given, asked = answers
+    given += ["", CLIENT, "3", "Other"]
+    assert vl("vault", "create", "mixim-ai/vault-hq", "--source", "gdrive", "--google_client_secret", "s") == 0
+    assert len(asked) == 4
+    info = vaults.read("mixim-ai/vault-hq", vaults_dir() / "mixim-ai" / "vault-hq").info
+    assert info.source["shared_drive"] == "Other"
+
+
+def test_create_asks_nothing_when_every_key_is_given(fake_github, computer, google_fake, answers, capsys):
+    fake_github.org("mixim-ai", ["alice"])
+    vl("org", "join", "mixim-ai")
+    assert vl(*CREATE) == 0
+    assert answers[1] == [] and "console.cloud.google.com" not in capsys.readouterr().out
+
+
 @pytest.mark.parametrize("args, message", [
     (["--source", "nope"], "no source kind 'nope'. Kinds: gdrive"),
     (["--source", "gdrive", "--shared_drive", "Nope", "--google_client_id", CLIENT, "--google_client_secret", "s"],
      "No shared drive named 'Nope'"),
     (CREATE[3:] + ["--folder", "../x"], "folder"),
-    (CREATE[3:][:4] + ["--google_client_id", CLIENT], "google_client_secret: missing"),
+    (CREATE[3:][:4] + ["--google_client_id", CLIENT], "Missing --google_client_secret"),
     (CREATE[3:] + ["--notes_from", "mixim-ai/marketing"], "a vault with a source can't take notes"),
 ])
 def test_create_refuses(fake_github, computer, google_fake, capsys, args, message):

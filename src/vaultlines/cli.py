@@ -24,6 +24,7 @@ from . import (
     obsidian,
     plugins,
     runtime,
+    util,
 )
 from . import label as lbl
 from . import vaults as vlt
@@ -354,15 +355,27 @@ def _create_with_source(args, vault_id: str, notes_from: list[str]) -> None:
         raise VlError("a vault with a source can't take notes, so it has no notes_from.")
     source = {"kind": args.source, **getattr(kind, "DEFAULTS", {})}
     source.update({key: getattr(args, key) for key in kind.OPTIONS if getattr(args, key, None) is not None})
-    problems = kind.validate_source(source)
+    missing = [key for key in getattr(kind, "REQUIRED", ()) if not str(source.get(key) or "").strip()]
+    problems = [p for p in kind.validate_source(source) if p.split(":", 1)[0] not in missing]
     if problems:
         raise VlError("; ".join(problems))
+    guide = getattr(kind, "GUIDE", "")
+    if missing and not util.interactive():
+        raise VlError(f"Missing {', '.join('--' + key for key in missing)}." + (f"\n\n{guide}" if guide else ""))
     if github.exists(vault_id):
         raise VlError(f"{vault_id} already exists on GitHub.")
     if "workflow" not in github.scopes():
         raise VlError("Your GitHub login can't add workflow files, and the vault's fill job needs one. "
                       "Run `gh auth refresh -h github.com -s workflow`, then try again.")
-    source, secret = kind.create(vault_id, source)
+    if missing:
+        say(guide)
+        for key in missing:
+            if key not in getattr(kind, "LATER", ()):
+                source[key] = util.ask(f"{key} ({kind.OPTIONS[key]})")
+    source, secret = kind.create(vault_id, source, util.ask)
+    problems = kind.validate_source(source)
+    if problems:
+        raise VlError("; ".join(problems))
     about = args.about or (kind.default_about(source) if hasattr(kind, "default_about") else "")
     comments = kind.comments(source) if hasattr(kind, "comments") else None
     path = vlt.path_of(vault_id)
@@ -932,8 +945,12 @@ def build_parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
     vault = sub.add_parser("vault", help="create or publish a vault")
     vsub = vault.add_subparsers(dest="vault_command", required=True, metavar="ACTION")
     kinds = ", ".join(sorted(plugins.SOURCES))
-    s = vsub.add_parser("create", help="a new vault, on this computer until you publish it",
-                        epilog=f"Source kinds: {kinds}. For a kind's keys: vl vault create --source KIND --help")
+    kind = plugins.SOURCES.get(_wanted_kind(argv or []))
+    epilog = f"Source kinds: {kinds}. For a kind's keys: vl vault create --source KIND --help"
+    if kind is not None:
+        epilog = f"Keys you leave out are asked for.\n\n{getattr(kind, 'GUIDE', '')}".strip()
+    s = vsub.add_parser("create", help="a new vault, on this computer until you publish it", epilog=epilog,
+                        formatter_class=argparse.RawDescriptionHelpFormatter)
     s.add_argument("vault", metavar="VAULT", nargs="?", help="OWNER/vault-NAME")
     s.add_argument("--about", metavar="TEXT", help="one line about the vault, for Claude")
     s.add_argument("--notes_from", metavar="REPO", action="append", help="a repo whose notes go here (OWNER/REPO); "
@@ -941,7 +958,6 @@ def build_parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
     s.add_argument("--publish", action="store_true", help="also publish it (a private repo on GitHub)")
     s.add_argument("--source", metavar="KIND", help=f"fill the vault from a source ({kinds}). The vault is "
                    "published, and its fill job runs on GitHub")
-    kind = plugins.SOURCES.get(_wanted_kind(argv or []))
     if kind is not None:
         group = s.add_argument_group(f"{_wanted_kind(argv)} source: each key goes into [source] in vault.toml")
         for key, text in kind.OPTIONS.items():

@@ -42,6 +42,31 @@ OPTIONS = {
 }
 DEFAULTS = {"folder": "", "max_size": "50M"}
 REQUIRED = ("shared_drive", "google_client_id", "google_client_secret")
+LATER = ("shared_drive",)  # create() asks for it after the bot logs in: a list of its shared drives
+# What you need before `vl vault create --source gdrive`, and how to get it.
+GUIDE = """\
+Before you start, you need two things. Log in to Google with your Workspace account
+(like you@company.com, not a personal Gmail account).
+
+1. A Google OAuth app, so vl can log in to Google. It takes about 5 minutes:
+   a. Make a project: https://console.cloud.google.com/projectcreate
+      For "Location", pick your organization.
+   b. Turn on the Drive API: https://console.cloud.google.com/apis/library/drive.googleapis.com
+      Check that your new project is selected at the top, then click "Enable".
+   c. Set up the login screen: https://console.cloud.google.com/auth/overview, then "Get started".
+      Audience: "Internal". Then only your organization's accounts can log in.
+   d. Make the client: https://console.cloud.google.com/auth/clients, then "Create client".
+      Application type: "Desktop app". After "Create", Google shows the client ID
+      (google_client_id) and the client secret (google_client_secret).
+
+2. A bot account: a Google account that the fill job logs in as.
+   a. Make a user for it: https://admin.google.com, then Directory > Users > "Add new user".
+   b. In Google Drive, add it to the shared drive as a "Viewer". Add it to no other shared drive.
+   vl asks Google only for read access, and checks that the login can't change Drive.
+
+Everyone who can read the vault on GitHub reads the text of every file in the shared drive
+(or the folder).
+"""
 KEYS = {"kind", *OPTIONS}
 # The fill job's setup, before `vl source refresh --here`.
 SETUP_STEPS = "      - run: curl -fsSL https://rclone.org/install.sh | sudo bash -s __RCLONE__\n"
@@ -610,16 +635,24 @@ def _drive_id(access: str, source: dict) -> tuple[str, str]:
     return google.find_shared_drive(google.shared_drives(access), source["shared_drive"])
 
 
-def create(vault_id: str, source: dict) -> tuple[dict, str]:
+def create(vault_id: str, source: dict, ask) -> tuple[dict, str]:
     """`vl vault create --source gdrive`, on an admin's computer: log in as the bot account,
-    check it can only read and can open the shared drive. Returns the [source] table and the
-    fill job's secret (the bot's refresh token)."""
+    check it can only read and can open the shared drive. Without a shared_drive, asks which
+    one. Returns the [source] table and the fill job's secret (the bot's refresh token)."""
     from .. import google
     from ..util import say
 
-    say("Log in to Google as the bot account: the account that only reads the shared drive.")
+    say("Log in to Google as the bot account: the account that only reads the shared drive. A browser opens.")
     refresh_token = google.login(source["google_client_id"], source["google_client_secret"])
     access = google.access_token(source["google_client_id"], source["google_client_secret"], refresh_token)
+    if not source.get("shared_drive"):
+        drives = google.shared_drives(access)
+        if not drives:
+            from ..util import VlError
+            raise VlError("The bot account isn't in any shared drive. Add it to one as a Viewer, then try again.")
+        say("The bot account can open these shared drives:")
+        source = {**source, "shared_drive": ask("shared_drive: which one fills the vault",
+                                                [d.get("name") or d["id"] for d in drives])}
     _drive_id(access, source)
     return source, refresh_token
 

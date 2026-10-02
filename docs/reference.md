@@ -31,6 +31,8 @@ Every kind works the same way:
 | `max_size` | Bigger files get a note without text (default `"50M"`). |
 | `google_client_id`, `google_client_secret` | The Google OAuth app (desktop type). Its secret isn't secret: Google says so for desktop apps. |
 
+`vl vault create --source gdrive` asks at a terminal for the keys left out: the client ID and secret first (after showing how to make them), then, once the bot account has logged in, the shared drive, picked from the bot's list. Without a terminal, it stops and prints the steps. `vl vault create --source gdrive --help` prints them too.
+
 `VL_SOURCE_TOKEN` is the bot account's read-only refresh token. Each refresh checks with Google that it can only read, lists the drive, converts new and changed files with markitdown, and writes one note per file. Notes keep keys that others added to their frontmatter.
 
 `vl source fetch VAULT PATH` finds the note whose frontmatter `path` is PATH and downloads the file by its Drive ID, so renames don't break it. Google's own files are exported: Docs to `.docx`, Sheets to `.xlsx`, Slides to `.pptx`, Drawings to `.pdf`. It uses your own read-only Google login (`vl source login VAULT`), kept in `~/.vaultlines/google/`.

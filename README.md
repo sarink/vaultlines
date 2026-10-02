@@ -83,7 +83,7 @@ vl vault create mixim-ai/vault-hq --source gdrive --shared_drive "Mixim HQ" \
   --google_client_id 1234-abc.apps.googleusercontent.com --google_client_secret GOCSPX-...
 ```
 
-After `--source KIND`, each flag is a key of the `[source]` table in `vault.toml`, spelled the same. `vl vault create --source KIND --help` lists them. A vault with a source is always published, because its fill job runs on GitHub.
+After `--source KIND`, each flag is a key of the `[source]` table in `vault.toml`, spelled the same. `vl vault create --source KIND --help` lists them, and says how to get each one. If you leave out a key, `vl` shows those steps and asks for it. A vault with a source is always published, because its fill job runs on GitHub.
 
 | Command | What it does |
 |---|---|
@@ -101,7 +101,16 @@ After `--source KIND`, each flag is a key of the `[source]` table in `vault.toml
 | `google_client_id` | The client ID of a Google OAuth app of type "Desktop". |
 | `google_client_secret` | Its secret. Google doesn't treat a desktop app's secret as secret. |
 
-`vl vault create` asks you to log in as a **bot account**: a Google account that is a member of the shared drive only. It checks that the login can only read Drive.
+Before you start, you need two things. Log in to Google with your Workspace account, not a personal Gmail account.
+
+1. **A Google OAuth app** (about 5 minutes):
+   1. Make a project: <https://console.cloud.google.com/projectcreate>. For "Location", pick your organization.
+   2. Turn on the Drive API: <https://console.cloud.google.com/apis/library/drive.googleapis.com>, then "Enable".
+   3. Set up the login screen: <https://console.cloud.google.com/auth/overview>, then "Get started". Audience: "Internal".
+   4. Make the client: <https://console.cloud.google.com/auth/clients>, then "Create client". Application type: "Desktop app". Google then shows the client ID and the client secret.
+2. **A bot account**: a Google account that the fill job logs in as. Make a user at <https://admin.google.com> (Directory > Users), and add it to the shared drive as a "Viewer". Add it to no other shared drive.
+
+`vl vault create` asks you to log in as the bot account. It checks that the login can only read Drive. If you left out `--shared_drive`, it lists the bot's shared drives and asks which one. Everyone who can read the vault reads the text of every file in the shared drive.
 
 A note looks like this:
 

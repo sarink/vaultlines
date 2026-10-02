@@ -38,10 +38,18 @@ A source kind. `source` is the vault's [source] table, already checked:
                                           `vl vault create --source KIND` takes each as --KEY
                                           (required)
   DEFAULTS                                {key: value} for keys that may be left out
+  REQUIRED                                keys that must be set. `vl vault create` asks for
+                                          the ones left out, at a terminal
+  LATER                                   required keys that create() asks for itself, like
+                                          gdrive's shared_drive, picked after the bot logs in
+  GUIDE                                   what you need before `vl vault create --source KIND`,
+                                          and how to get it. Shown by --help, and when a
+                                          required key is left out
   validate_source(source)                 -> ["key: problem", ...] (required)
-  create(vault_id, source)                -> (source, secret): on an admin's computer, before
+  create(vault_id, source, ask)           -> (source, secret): on an admin's computer, before
                                              the vault's repo exists. `secret` is what the
-                                             fill job logs in with (required)
+                                             fill job logs in with. ask(question, choices=None)
+                                             asks the person for LATER keys (required)
   SETUP_STEPS                             the fill job's steps before the refresh (YAML)
   refresh(root, source, vault_id, secret, force)
                                           -> a status. The fill job: make the notes in `root`
