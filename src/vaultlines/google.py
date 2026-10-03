@@ -7,7 +7,7 @@ refused. Tokens never appear in messages.
 Logins for fetching originals are saved in ~/.vaultlines/google/, one per Google app
 (client ID). The hook keeps Claude sessions away from that folder.
 
-Tests set VAULTLINES_FAKE_GOOGLE to a fake Google's address; only one on this computer
+Tests set VL_FAKE_GOOGLE to a fake Google's address; only one on this computer
 (127.0.0.1 or localhost) is used.
 """
 
@@ -51,7 +51,7 @@ class NoAccess(VlError):
 
 
 def _fake() -> str | None:
-    url = os.environ.get("VAULTLINES_FAKE_GOOGLE") or ""
+    url = os.environ.get("VL_FAKE_GOOGLE") or ""
     m = re.fullmatch(r"http://(127\.0\.0\.1|localhost):(\d+)/?", url)
     return url.rstrip("/") if m else None
 

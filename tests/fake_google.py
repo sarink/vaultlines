@@ -1,6 +1,6 @@
 """A fake Google for tests: OAuth login (with PKCE), tokeninfo and the Drive API, on 127.0.0.1.
 
-vl talks to it when VAULTLINES_FAKE_GOOGLE is its address. Its "browser" approves every
+vl talks to it when VL_FAKE_GOOGLE is its address. Its "browser" approves every
 login at once.
 """
 

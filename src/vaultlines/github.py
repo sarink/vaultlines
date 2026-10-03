@@ -4,8 +4,8 @@ GitHub decides who gets which vault: discovery lists the `vault-` repos with a
 vault.toml that you can access, and who can see a vault is who GitHub says can see
 its repo.
 
-Tests set VAULTLINES_FAKE_GITHUB to a JSON file in place of GitHub, and
-VAULTLINES_FAKE_LOGIN to who they are:
+Tests set VL_FAKE_GITHUB to a JSON file in place of GitHub, and
+VL_FAKE_LOGIN to who they are:
 
     {"root": "/tmp/remotes",                        # bare repos: root/OWNER/REPO.git
      "orgs": {"acme": ["alice", "bob"]},
@@ -35,7 +35,7 @@ class Unreachable(Exception):
 # ---------------------------------------------------------------- the fake
 
 def _fake_path() -> Path | None:
-    found = os.environ.get("VAULTLINES_FAKE_GITHUB")
+    found = os.environ.get("VL_FAKE_GITHUB")
     return Path(found) if found else None
 
 
@@ -100,7 +100,7 @@ def scopes() -> set[str]:
 def login() -> str:
     """Your GitHub login in lowercase, or "" if unknown."""
     if _fake_path():
-        return os.environ.get("VAULTLINES_FAKE_LOGIN", "").lower()
+        return os.environ.get("VL_FAKE_LOGIN", "").lower()
     try:
         return run(["gh", "api", "user", "--jq", ".login"], check=False).stdout.strip().lower()
     except VlError:
@@ -113,7 +113,7 @@ def owner_kind(owner: str) -> str | None:
     if data is not None:
         if owner in data["orgs"]:
             return "Organization"
-        users = {os.environ.get("VAULTLINES_FAKE_LOGIN", "")} | {m for ms in data["orgs"].values() for m in ms}
+        users = {os.environ.get("VL_FAKE_LOGIN", "")} | {m for ms in data["orgs"].values() for m in ms}
         users |= {r.split("/")[0] for r in data["repos"] if r.split("/")[0] not in data["orgs"]}
         return "User" if owner in users else None
     try:

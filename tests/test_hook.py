@@ -595,11 +595,12 @@ def test_vl_commands_and_config_ask_unless_you_asked(world):
                        ("Bash", {"command": "vl source refresh acme/vault-drive"}),  # pushes a read-only vault
                        ("Bash", {"command": "vl source refresh --convert-only"}),
                        ("Bash", {"command": "cat ~/.vaultlines/config.toml"}),
-                       ("Bash", {"command": "VAULTLINES_HOME=/tmp/x vl status"}),
+                       ("Bash", {"command": "VL_HOME=/tmp/x vl status"}),
                        ("Bash", {"command": "echo '{\"disableAllHooks\": true}' > .claude/settings.json"}),
                        ("Edit", {"file_path": str(config), "old_string": "a", "new_string": "b"})):
         assert decision(s.call(tool, **args)) == "ask", args
     assert "Mention vl in your message" in reason(s.call("Bash", command="vl apply"))
+    assert "sets a VL_ variable" in reason(s.call("Bash", command="VL_HOME=/tmp/x vl status"))
     for harmless in ("vl status", "vl doctor", "vl sync", "vl check", "vl source fetch acme/vault-drive x",
                      "echo evaluate this"):
         assert decision(s.call("Bash", command=harmless)) is None, harmless
@@ -671,7 +672,7 @@ def test_dev_mode_skips_every_guard(world):
                        ("Write", {"file_path": str(world.vl / "state" / "runtime.json"), "content": "{}"}),
                        ("Write", {"file_path": world.vault("acme/vault-drive", "x.md"), "content": "x"}),  # from a source
                        ("Bash", {"command": f"vl apply && cat {google}"}),
-                       ("Bash", {"command": "VAULTLINES_HOME=/tmp/x vl status"}),
+                       ("Bash", {"command": "VL_HOME=/tmp/x vl status"}),
                        ("Edit", {"file_path": str(world.vl / "config.toml"), "old_string": "a", "new_string": "b"}),
                        ("mcp__basic-memory__read_note", {"identifier": "x", "project": "acme/vault-founders"})):
         assert s.call(tool, **args) is None, (tool, args)

@@ -3,11 +3,11 @@
 A vault's vault.toml says where its notes come from:
 
     [source]
-    kind                 = "gdrive"
-    folder_id            = "0AACMEHQ1234567890"   # Acme HQ
-    max_size             = "50M"          # bigger files get a note without text
-    google_client_id     = "1234-abc.apps.googleusercontent.com"
-    google_client_secret = "GOCSPX-…"     # a desktop app's; Google doesn't treat it as secret
+    kind          = "gdrive"
+    folder_id     = "0AACMEHQ1234567890"   # Acme HQ
+    max_size      = "50M"                  # bigger files get a note without text
+    client_id     = "1234-abc.apps.googleusercontent.com"
+    client_secret = "GOCSPX-…"             # a desktop app's; Google doesn't treat it as secret
 
 folder_id is a folder in Drive, or a whole shared drive: the part of its URL after
 /folders/. `vl vault create --source gdrive` lists them by name, so you can pick one.
@@ -43,11 +43,11 @@ SOURCE = "gdrive"  # the kind, and the `source` key of every note this source wr
 OPTIONS = {
     "folder_id": "the Drive folder or shared drive the notes come from: its URL or ID (left out: vl lists them)",
     "max_size": 'bigger files get a note without text (default: "50M")',
-    "google_client_id": "the client ID of the Google OAuth app (desktop type)",
-    "google_client_secret": "its secret (a desktop app's; Google doesn't treat it as secret)",
+    "client_id": "the client ID of the Google OAuth app (desktop type)",
+    "client_secret": "its secret (a desktop app's; Google doesn't treat it as secret)",
 }
 DEFAULTS = {"max_size": "50M"}
-REQUIRED = ("folder_id", "google_client_id", "google_client_secret")
+REQUIRED = ("folder_id", "client_id", "client_secret")
 LATER = ("folder_id",)  # create() asks for it after the login: the folders and shared drives it can open
 # What you need before `vl vault create --source gdrive`, and how to get it.
 GUIDE = """\
@@ -65,7 +65,7 @@ Before you start, you need two things.
       log in, Google warns that it hasn't verified the app. It's your own app, so continue.
    d. Make the client: https://console.cloud.google.com/auth/clients, then "Create client".
       Application type: "Desktop app". After "Create", Google shows the client ID
-      (google_client_id) and the client secret (google_client_secret).
+      (client_id) and the client secret (client_secret).
 
 2. A Google account for the refresh job to log in as. We recommend a bot account: an
    account that can open the vault's folder (or shared drive) and nothing else.
@@ -117,7 +117,7 @@ TEXT_EXTENSIONS = {".md", ".markdown", ".txt", ".csv"}
 # ---------------------------------------------------------------- the [source] table
 
 def _test_remotes() -> bool:
-    return os.environ.get("VAULTLINES_TEST_REMOTES") == "1"
+    return os.environ.get("VL_TEST_REMOTES") == "1"
 
 
 def parse_size(text: str) -> int:
@@ -181,7 +181,7 @@ def rclone_config(source: dict, place: dict, access: str, refresh: str) -> str:
     expiry = (dt.datetime.now(dt.UTC) + dt.timedelta(minutes=50)).strftime("%Y-%m-%dT%H:%M:%SZ")
     token = json.dumps({"access_token": access, "token_type": "Bearer", "refresh_token": refresh, "expiry": expiry})
     lines = ["[gdrive]", "type = drive", "scope = drive.readonly",
-             f"client_id = {source['google_client_id']}", f"client_secret = {source['google_client_secret']}",
+             f"client_id = {source['client_id']}", f"client_secret = {source['client_secret']}",
              f"token = {token}"]
     if place["drive_id"]:
         lines.append(f"team_drive = {place['drive_id']}")
@@ -719,7 +719,7 @@ def default_about(name: str) -> str:
 
 def comments(source: dict, name: str) -> dict:
     """Comments for the [source] table vl writes. `name`: what people call the folder."""
-    return {"folder_id": name, "google_client_secret": "a desktop app's secret; Google doesn't treat it as secret"}
+    return {"folder_id": name, "client_secret": "a desktop app's secret; Google doesn't treat it as secret"}
 
 
 def _choose(ask, question: str, items: list[dict]) -> dict:
@@ -767,8 +767,8 @@ def create(vault_id: str, source: dict, ask) -> tuple[dict, str, str]:
     from ..util import say
 
     say("Log in to Google as the account the refresh job uses (we recommend a bot account). A browser opens.")
-    refresh_token = google.login(source["google_client_id"], source["google_client_secret"])
-    access = google.access_token(source["google_client_id"], source["google_client_secret"], refresh_token)
+    refresh_token = google.login(source["client_id"], source["client_secret"])
+    access = google.access_token(source["client_id"], source["client_secret"], refresh_token)
     path = ""
     if source.get("folder_id"):
         source = {**source, "folder_id": folder_id_of(source["folder_id"]) or source["folder_id"]}
@@ -795,7 +795,7 @@ def fetch_changes(root: Path, source: dict, vault_id: str, secret, force: bool, 
     if _local(source.get("folder_id") or ""):
         return _fetch(root, source, remote, None, force, staged)  # a local folder, in tests
     token = secret()
-    access = google.access_token(source["google_client_id"], source["google_client_secret"], token)
+    access = google.access_token(source["client_id"], source["client_secret"], token)
     google.check_read_only(access)
     place = google.find_folder(access, folder_id_of(source["folder_id"]))
     with tempfile.TemporaryDirectory(prefix="vl-gdrive-") as work:
@@ -811,7 +811,7 @@ def _logged_in(v, source: dict) -> str:
     from .. import google
     from ..util import VlError
 
-    cid, secret = source["google_client_id"], source["google_client_secret"]
+    cid, secret = source["client_id"], source["client_secret"]
     refresh_token = google.load_token(cid)
     if not refresh_token:
         refresh_token = google.login(cid, secret)
@@ -863,12 +863,12 @@ def fetch(v, source: dict, path: str) -> Path:
 def login(source: dict) -> None:
     from .. import google
 
-    google.save_token(source["google_client_id"],
-                      google.login(source["google_client_id"], source["google_client_secret"]))
+    google.save_token(source["client_id"],
+                      google.login(source["client_id"], source["client_secret"]))
 
 
 def saved_login(source: dict) -> str | None:
     """Your own login's refresh token, if you logged in on this computer."""
     from .. import google
 
-    return google.load_token(source["google_client_id"])
+    return google.load_token(source["client_id"])

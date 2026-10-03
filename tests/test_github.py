@@ -38,7 +38,7 @@ def test_discovery_needs_the_prefix_and_vault_toml(fake):
 
 
 def test_discovery_only_shows_repos_you_can_access(fake, monkeypatch):
-    monkeypatch.setenv("VAULTLINES_FAKE_LOGIN", "bob")
+    monkeypatch.setenv("VL_FAKE_LOGIN", "bob")
     assert sorted(github.vault_repos("acme")) == ["acme/vault-hq", "acme/vault-public"]
     assert sorted(github.vault_repos("carol")) == ["carol/vault-open"]  # public
 
@@ -71,7 +71,7 @@ def test_creating_a_repo_pushes_it_and_only_you_can_see_it(fake, tmp_path):
 def test_who_can_see_a_repo(fake, monkeypatch):
     assert github.audience("acme/vault-hq").to_json()["logins"] == ["alice", "bob"]
     assert github.audience("carol/vault-open").kind == "everyone"
-    monkeypatch.setenv("VAULTLINES_FAKE_LOGIN", "bob")
+    monkeypatch.setenv("VL_FAKE_LOGIN", "bob")
     hq = github.audience("acme/vault-hq")
     assert hq.kind == "unknown" and "read-only" in hq.reason
     assert github.audience("acme/vault-private").kind == "unknown"  # no access at all
@@ -88,7 +88,7 @@ def test_secrets_and_workflow_runs_are_recorded(fake):
 
 
 def test_real_secret_value_goes_through_stdin(monkeypatch):
-    monkeypatch.delenv("VAULTLINES_FAKE_GITHUB", raising=False)
+    monkeypatch.delenv("VL_FAKE_GITHUB", raising=False)
     calls = []
 
     def fake_run(cmd, **kw):

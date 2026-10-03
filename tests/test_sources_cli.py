@@ -21,15 +21,15 @@ HQ = "0AACMEHQ1234567890"  # the shared drive Acme HQ, in the fake Google
 SOURCE = f'''about = "The text of every file in Acme HQ, in Google Drive. Claude only reads it."
 
 [source]
-kind                 = "gdrive"
-folder_id            = "{HQ}"
-max_size             = "50M"
-google_client_id     = "{CLIENT}"
-google_client_secret = "GOCSPX-x"
+kind          = "gdrive"
+folder_id     = "{HQ}"
+max_size      = "50M"
+client_id     = "{CLIENT}"
+client_secret = "GOCSPX-x"
 '''
 CREATE = ["vault", "create", "acme/vault-hq", "--source", "gdrive",
           "--folder_id", f"https://drive.google.com/drive/folders/{HQ}?usp=sharing",
-          "--google_client_id", CLIENT, "--google_client_secret", "GOCSPX-x"]
+          "--client_id", CLIENT, "--client_secret", "GOCSPX-x"]
 
 
 def note(path, file_id, mime="application/pdf"):
@@ -41,7 +41,7 @@ def note(path, file_id, mime="application/pdf"):
 @pytest.fixture
 def google_fake(monkeypatch):
     g = FakeGoogle()
-    monkeypatch.setenv("VAULTLINES_FAKE_GOOGLE", g.url)
+    monkeypatch.setenv("VL_FAKE_GOOGLE", g.url)
     yield g
     g.close()
 
@@ -82,9 +82,9 @@ def test_create_makes_the_vault_its_fill_job_and_secret(fake_github, computer, g
     assert info.about == "The text of every file in Acme HQ, in Google Drive. Claude only reads it."
     # Every key is the flag that set it; a folder's URL becomes its ID.
     assert info.source == {"kind": "gdrive", "folder_id": HQ, "max_size": "50M",
-                           "google_client_id": CLIENT, "google_client_secret": "GOCSPX-x"}
-    assert f'folder_id            = "{HQ}"   # Acme HQ\n' in shown.stdout
-    assert list(info.source) == ["kind", "folder_id", "max_size", "google_client_id", "google_client_secret"]
+                           "client_id": CLIENT, "client_secret": "GOCSPX-x"}
+    assert f'folder_id     = "{HQ}"   # Acme HQ\n' in shown.stdout
+    assert list(info.source) == ["kind", "folder_id", "max_size", "client_id", "client_secret"]
     workflow = subprocess.run(["git", "--git-dir", str(bare), "show", "HEAD:.github/workflows/vl-source.yml"],
                               capture_output=True, text=True).stdout
     assert workflow == cli.source_workflow(gdrive)
@@ -110,7 +110,7 @@ def test_create_takes_every_key_of_the_kind(fake_github, computer, google_fake):
 def test_help_for_a_kind_lists_only_its_keys(capsys):
     assert vl("vault", "create", "--source", "gdrive", "--help") == 0
     out = capsys.readouterr().out
-    for key in ("--folder_id", "--max_size", "--google_client_id", "--google_client_secret"):
+    for key in ("--folder_id", "--max_size", "--client_id", "--client_secret"):
         assert key in out
     assert "--shared_drive" not in out and "--folder " not in out
     assert vl("vault", "create", "--help") == 0
@@ -151,7 +151,7 @@ def test_create_without_a_terminal_says_what_is_missing_and_how_to_get_it(fake_g
     monkeypatch.setattr(util, "interactive", lambda: False)
     assert vl("vault", "create", "acme/vault-hq", "--source", "gdrive") == 1
     err = capsys.readouterr().err
-    assert "--folder_id" in err and "--google_client_id" in err and "--google_client_secret" in err
+    assert "--folder_id" in err and "--client_id" in err and "--client_secret" in err
     assert "console.cloud.google.com/auth/clients" in err  # how to get them
     assert google_fake.requests == [] and "acme/vault-hq" not in fake_github.load()["repos"]
 
@@ -165,11 +165,11 @@ def test_create_asks_for_what_is_missing(fake_github, computer, google_fake, ans
     out = capsys.readouterr().out
     assert "console.cloud.google.com/auth/clients" in out  # the steps, before the questions
     assert "OWNER/vault-NAME" in asked[0] and "OWNER/vault-NAME" in asked[1] and "OWNER/vault-NAME" in out
-    assert "google_client_id" in asked[2] and "google_client_secret" in asked[3] and "folder" in asked[4]
+    assert "client_id" in asked[2] and "client_secret" in asked[3] and "folder" in asked[4]
     assert "1. Acme HQ (shared drive)" in out and "2. Other (shared drive)" in out and "3. My Drive" in out
     info = vaults.read("acme/vault-hq", vaults_dir() / "acme" / "vault-hq").info
     assert info.source["folder_id"] == HQ  # it has no folders, so there's nothing more to ask
-    assert (info.source["google_client_id"], info.source["google_client_secret"]) == (CLIENT, "GOCSPX-x")
+    assert (info.source["client_id"], info.source["client_secret"]) == (CLIENT, "GOCSPX-x")
 
 
 @pytest.mark.parametrize("args", [["--source", "gdrive"], []])
@@ -186,7 +186,7 @@ def test_create_asks_again_for_a_bad_answer(fake_github, computer, google_fake, 
     vl("org", "join", "acme")
     given, asked = answers
     given += ["", CLIENT, "9", "Other (shared drive)"]
-    assert vl("vault", "create", "acme/vault-hq", "--source", "gdrive", "--google_client_secret", "s") == 0
+    assert vl("vault", "create", "acme/vault-hq", "--source", "gdrive", "--client_secret", "s") == 0
     assert len(asked) == 4
     info = vaults.read("acme/vault-hq", vaults_dir() / "acme" / "vault-hq").info
     assert info.source["folder_id"] == "0BOTHER"
@@ -202,8 +202,8 @@ def test_create_walks_the_folders_and_can_go_back(fake_github, computer, google_
     given, _ = answers
     # Acme HQ, Finance/, back up, Finance/ again, then all of it.
     given += ["1", "2", "(back)", "Finance/", "1"]
-    assert vl("vault", "create", "acme/vault-hq", "--source", "gdrive", "--google_client_id", CLIENT,
-              "--google_client_secret", "s") == 0
+    assert vl("vault", "create", "acme/vault-hq", "--source", "gdrive", "--client_id", CLIENT,
+              "--client_secret", "s") == 0
     out = capsys.readouterr().out
     assert "3. Board decks (folder shared with you)" in out and "4. My Drive" in out
     assert "1. All of Acme HQ" in out and "2. Finance/" in out and "3. Legal/" in out
@@ -224,10 +224,10 @@ def test_create_asks_nothing_when_every_key_is_given(fake_github, computer, goog
 
 @pytest.mark.parametrize("args, message", [
     (["--source", "nope"], "no source kind 'nope'. Kinds: gdrive"),
-    (["--source", "gdrive", "--folder_id", "1NOPE", "--google_client_id", CLIENT, "--google_client_secret", "s"],
+    (["--source", "gdrive", "--folder_id", "1NOPE", "--client_id", CLIENT, "--client_secret", "s"],
      "This Google account can't open the folder 1NOPE"),
     (CREATE[3:] + ["--folder_id", "Acme HQ"], "folder_id: should be a Drive folder's URL or ID"),
-    (CREATE[3:][:4] + ["--google_client_id", CLIENT], "Missing --google_client_secret"),
+    (CREATE[3:][:4] + ["--client_id", CLIENT], "Missing --client_secret"),
     (CREATE[3:] + ["--notes_from", "acme/marketing"], "a vault with a source can't take notes"),
 ])
 def test_create_refuses(fake_github, computer, google_fake, capsys, args, message):
@@ -352,7 +352,7 @@ def test_sync_only_pulls_a_vault_with_a_source(hq, capsys):
 
 
 def test_old_fetched_files_are_cleaned(tmp_path, monkeypatch):
-    monkeypatch.setenv("VAULTLINES_HOME", str(tmp_path))
+    monkeypatch.setenv("VL_HOME", str(tmp_path))
     old, new = fetch_dir("o/vault-d") / "a" / "old.pdf", fetch_dir("o/vault-d") / "new.pdf"
     for p in (old, new):
         p.parent.mkdir(parents=True, exist_ok=True)

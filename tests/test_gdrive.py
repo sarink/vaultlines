@@ -19,8 +19,8 @@ needs_tools = pytest.mark.skipif(not (shutil.which("rclone") and shutil.which("u
                                  reason="rclone or uv isn't installed")
 VAULT = "acme/vault-hq"
 SOURCE = {"kind": "gdrive", "folder_id": "0AACMEHQ1234567890",
-          "max_size": "50M", "google_client_id": "1234-abc.apps.googleusercontent.com",
-          "google_client_secret": "GOCSPX-x"}
+          "max_size": "50M", "client_id": "1234-abc.apps.googleusercontent.com",
+          "client_secret": "GOCSPX-x"}
 
 
 # ---------------------------------------------------------------- the [source] table
@@ -36,8 +36,8 @@ def test_a_good_source():
     ({"folder_id": "/abs"}, "folder_id"),
     ({"folder_id": None}, "folder_id: missing"),
     ({"max_size": "lots"}, "max_size"),
-    ({"google_client_id": ""}, "google_client_id"),
-    ({"google_client_secret": None}, "google_client_secret"),
+    ({"client_id": ""}, "client_id"),
+    ({"client_secret": None}, "client_secret"),
     ({"colour": "red"}, "colour: unknown key"),
     ({"shared_drive": "Acme HQ"}, "shared_drive: unknown key"),
 ])
@@ -63,7 +63,7 @@ def test_a_folder_id_from_a_url_or_an_id(text, wanted):
 def test_a_local_folder_counts_only_in_tests(monkeypatch):
     local = {**SOURCE, "folder_id": "/tmp/drive"}
     assert drive.validate_source(local)
-    monkeypatch.setenv("VAULTLINES_TEST_REMOTES", "1")
+    monkeypatch.setenv("VL_TEST_REMOTES", "1")
     assert drive.validate_source(local) == []
     assert drive.remote_path(local) == "/tmp/drive"
     assert drive.remote_path(SOURCE) == "gdrive:"
@@ -285,8 +285,8 @@ class Vault:
 @pytest.fixture
 def local_drive(tmp_path, monkeypatch):
     uv_cache = subprocess.run(["uv", "cache", "dir"], capture_output=True, text=True).stdout.strip() if shutil.which("uv") else ""
-    monkeypatch.setenv("VAULTLINES_TEST_REMOTES", "1")
-    monkeypatch.setenv("VAULTLINES_HOME", str(tmp_path / "vl"))
+    monkeypatch.setenv("VL_TEST_REMOTES", "1")
+    monkeypatch.setenv("VL_HOME", str(tmp_path / "vl"))
     if uv_cache:
         monkeypatch.setenv("UV_CACHE_DIR", uv_cache)
     src = tmp_path / "drive"

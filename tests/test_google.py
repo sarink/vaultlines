@@ -18,8 +18,8 @@ SECRET = "GOCSPX-x"
 @pytest.fixture
 def fake(monkeypatch, tmp_path):
     g = FakeGoogle()
-    monkeypatch.setenv("VAULTLINES_FAKE_GOOGLE", g.url)
-    monkeypatch.setenv("VAULTLINES_HOME", str(tmp_path / "vl"))
+    monkeypatch.setenv("VL_FAKE_GOOGLE", g.url)
+    monkeypatch.setenv("VL_HOME", str(tmp_path / "vl"))
     yield g
     g.close()
 
@@ -63,14 +63,14 @@ def test_check_read_only(fake):
 
 
 def test_offline_fails_closed(monkeypatch):
-    monkeypatch.setenv("VAULTLINES_FAKE_GOOGLE", "http://127.0.0.1:9")  # nothing listens there
+    monkeypatch.setenv("VL_FAKE_GOOGLE", "http://127.0.0.1:9")  # nothing listens there
     with pytest.raises(VlError, match="Couldn't reach Google"):
         google.check_read_only(ACCESS)
 
 
 @pytest.mark.parametrize("url", ["http://evil.example.com:80", "https://127.0.0.1.evil.com", "file:///tmp"])
 def test_a_fake_google_must_be_on_this_computer(monkeypatch, url):
-    monkeypatch.setenv("VAULTLINES_FAKE_GOOGLE", url)
+    monkeypatch.setenv("VL_FAKE_GOOGLE", url)
     assert google.urls()["token"] == "https://oauth2.googleapis.com/token"
 
 

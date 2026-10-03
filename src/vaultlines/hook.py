@@ -337,7 +337,7 @@ def _leak_reason(state: dict, runtime: dict, target: str, people: list[str], ext
 
 VL_COMMAND_RE = re.compile(
     r"(?:^|[\s;&|(`])(?:\S*/)?vl\s+(init|apply|uninstall|org|vault|source\s+(?:login|refresh))\b")
-VL_ENV_RE = re.compile(r"\bVAULTLINES_[A-Z_]+")
+VL_ENV_RE = re.compile(r"\bVL_[A-Z_]+")
 DEV_MODE = ("Dev mode: vl's hook guards nothing here (dangerously_skip_hook_guards in config.toml), so every "
             "vault and vl's own files are open.")
 GOOGLE = "Google logins are for vl only. To get an original from Drive, run `vl source fetch OWNER/REPO PATH`."
@@ -419,7 +419,7 @@ def self_guard(event: dict, runtime: dict) -> tuple[str, str] | None:
         if mentions(command, state) or mentions(command, config):
             return "ask", "This command touches vl's own files (its config or session records)."
         if VL_ENV_RE.search(command):
-            return "ask", "This command sets a VAULTLINES_ variable, which changes where vl looks."
+            return "ask", "This command sets a VL_ variable, which changes where vl looks."
         m = VL_COMMAND_RE.search(command)
         if m:
             return "ask", f"This runs `vl {m.group(1)}`, which changes what vl allows. (Mention vl in your message to skip this question.)"

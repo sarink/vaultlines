@@ -102,9 +102,9 @@ class World:
 def world(tmp_path, monkeypatch) -> World:
     w = World(tmp_path.resolve())
     monkeypatch.setenv("HOME", str(w.home))
-    monkeypatch.setenv("VAULTLINES_HOME", str(w.vl))
+    monkeypatch.setenv("VL_HOME", str(w.vl))
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
-    monkeypatch.delenv("VAULTLINES_TEST_REMOTES", raising=False)
+    monkeypatch.delenv("VL_TEST_REMOTES", raising=False)
     return w
 
 
@@ -143,8 +143,8 @@ def commit_files(work: Path, files: dict[str, str], message: str) -> None:
 
 
 class FakeGitHub:
-    """VAULTLINES_FAKE_GITHUB: a JSON file of orgs and repos (who can push or read each),
-    with bare repos under `root`. VAULTLINES_FAKE_LOGIN says who you are."""
+    """VL_FAKE_GITHUB: a JSON file of orgs and repos (who can push or read each),
+    with bare repos under `root`. VL_FAKE_LOGIN says who you are."""
 
     def __init__(self, tmp_path: Path, monkeypatch):
         self.root = tmp_path / "remotes"
@@ -152,8 +152,8 @@ class FakeGitHub:
         self.path = tmp_path / "github.json"
         self.monkeypatch = monkeypatch
         self.save({"root": str(self.root), "orgs": {}, "repos": {}})
-        monkeypatch.setenv("VAULTLINES_FAKE_GITHUB", str(self.path))
-        monkeypatch.setenv("VAULTLINES_TEST_REMOTES", "1")
+        monkeypatch.setenv("VL_FAKE_GITHUB", str(self.path))
+        monkeypatch.setenv("VL_TEST_REMOTES", "1")
         self.login("alice")
 
     def load(self) -> dict:
@@ -163,7 +163,7 @@ class FakeGitHub:
         self.path.write_text(json.dumps(data))
 
     def login(self, who: str) -> None:
-        self.monkeypatch.setenv("VAULTLINES_FAKE_LOGIN", who)
+        self.monkeypatch.setenv("VL_FAKE_LOGIN", who)
 
     def org(self, name: str, members: list[str]) -> None:
         data = self.load()
@@ -195,10 +195,10 @@ def computer(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("VAULTLINES_HOME", str(home / ".vaultlines"))
+    monkeypatch.setenv("VL_HOME", str(home / ".vaultlines"))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / ".claude"))
-    monkeypatch.setenv("VAULTLINES_NO_LAUNCHD", "1")
-    monkeypatch.setenv("VAULTLINES_NO_NOTIFY", "1")
+    monkeypatch.setenv("VL_NO_LAUNCHD", "1")
+    monkeypatch.setenv("VL_NO_NOTIFY", "1")
     gitconfig = tmp_path / "gitconfig"
     gitconfig.write_text("[init]\n\tdefaultBranch = main\n[user]\n\tname = t\n\temail = t@t\n")
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(gitconfig))

@@ -187,7 +187,7 @@ REQUIRED = {
 def cmd_init(args) -> None:
     basic_memory = config.load_file().basic_memory
     required = dict(REQUIRED)
-    if os.environ.get("VAULTLINES_FAKE_GITHUB"):
+    if os.environ.get("VL_FAKE_GITHUB"):
         required.pop("gh")
     if basic_memory:
         required["uvx"] = "https://docs.astral.sh/uv/ (on macOS: brew install uv)"

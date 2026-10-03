@@ -21,7 +21,7 @@ def log_path() -> Path:
 
 
 def supported() -> bool:
-    return sys.platform == "darwin" and os.environ.get("VAULTLINES_NO_LAUNCHD") != "1"
+    return sys.platform == "darwin" and os.environ.get("VL_NO_LAUNCHD") != "1"
 
 
 def _vl_path() -> str:
@@ -46,8 +46,8 @@ def _path_env() -> str:
 
 
 def _plist(interval: int) -> str:
-    found = os.environ.get("VAULTLINES_HOME")
-    custom_home = f"<key>VAULTLINES_HOME</key><string>{vl_home()}</string>" if found else ""
+    found = os.environ.get("VL_HOME")
+    custom_home = f"<key>VL_HOME</key><string>{vl_home()}</string>" if found else ""
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">

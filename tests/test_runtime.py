@@ -7,7 +7,7 @@ from vaultlines.vaults import Info, Vault
 
 
 def make(tmp_path, monkeypatch) -> Config:
-    monkeypatch.setenv("VAULTLINES_HOME", str(tmp_path / "vl"))
+    monkeypatch.setenv("VL_HOME", str(tmp_path / "vl"))
     cfg = Config(me="kabir", owners=["kabir", "acme"])
 
     def add(vid, about="", notes_from=(), source=None, remote=True):
@@ -84,7 +84,7 @@ def test_lost_vaults_stay_known_but_arent_used(tmp_path, monkeypatch):
 
 
 def test_stale(tmp_path, monkeypatch):
-    monkeypatch.setenv("VAULTLINES_HOME", str(tmp_path))
+    monkeypatch.setenv("VL_HOME", str(tmp_path))
     assert runtime.stale(None) == "runtime.json is missing"
     assert "another version" in runtime.stale({"version": 3})
     Path(tmp_path / "config.toml").write_text("")

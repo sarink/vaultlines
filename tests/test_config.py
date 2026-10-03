@@ -27,7 +27,7 @@ reads = ["kabir/vault-recipes"]
 
 @pytest.fixture
 def home(tmp_path, monkeypatch):
-    monkeypatch.setenv("VAULTLINES_HOME", str(tmp_path / "vl"))
+    monkeypatch.setenv("VL_HOME", str(tmp_path / "vl"))
     monkeypatch.setenv("HOME", str(tmp_path))
     return tmp_path
 

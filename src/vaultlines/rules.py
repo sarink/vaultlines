@@ -106,7 +106,7 @@ def repo_id(url: str) -> str | None:
     m = GITHUB_RE.match(url.strip())
     if m:
         return f"{m.group(1)}/{m.group(2)}".lower()
-    if os.environ.get("VAULTLINES_TEST_REMOTES") == "1" and url.startswith("file://"):
+    if os.environ.get("VL_TEST_REMOTES") == "1" and url.startswith("file://"):
         parts = url[len("file://"):].rstrip("/").removesuffix(".git").split("/")
         if len(parts) >= 2 and parts[-2] and parts[-1]:
             return f"{parts[-2]}/{parts[-1]}".lower()

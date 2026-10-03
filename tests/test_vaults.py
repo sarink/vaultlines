@@ -75,7 +75,7 @@ def _repo(path, origin=None):
 
 
 def test_on_disk(tmp_path, monkeypatch):
-    monkeypatch.setenv("VAULTLINES_HOME", str(tmp_path))
+    monkeypatch.setenv("VL_HOME", str(tmp_path))
     root = tmp_path / "vaults"
     _repo(root / "acme" / "vault-public", "https://github.com/acme/vault-public.git")
     (root / "acme" / "vault-public" / "vault.toml").write_text('about = "Everyone."\nnotes_from = ["acme/x"]\n')
@@ -110,7 +110,7 @@ def test_remote_id(url, found):
 
 
 def test_file_remotes_count_in_tests(monkeypatch):
-    monkeypatch.setenv("VAULTLINES_TEST_REMOTES", "1")
+    monkeypatch.setenv("VL_TEST_REMOTES", "1")
     assert vaults.remote_id("file:///tmp/remotes/acme/vault-public.git") == "acme/vault-public"
 
 

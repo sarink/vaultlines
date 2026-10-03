@@ -38,8 +38,8 @@ def expand(path: str | Path) -> Path:
 
 
 def vl_home() -> Path:
-    """Everything vl owns: ~/.vaultlines, or VAULTLINES_HOME (tests)."""
-    found = os.environ.get("VAULTLINES_HOME")
+    """Everything vl owns: ~/.vaultlines, or VL_HOME (tests)."""
+    found = os.environ.get("VL_HOME")
     return Path(os.path.abspath(os.path.expanduser(found))) if found else home() / ".vaultlines"
 
 
@@ -155,6 +155,6 @@ def warn(message: str) -> None:
 
 def notify(message: str) -> None:
     """Show a macOS notification. Does nothing elsewhere, or in tests."""
-    if sys.platform == "darwin" and os.environ.get("VAULTLINES_NO_NOTIFY") != "1":
+    if sys.platform == "darwin" and os.environ.get("VL_NO_NOTIFY") != "1":
         script = f"display notification {json.dumps(message)} with title \"vaultlines\""
         subprocess.run(["osascript", "-e", script], capture_output=True)

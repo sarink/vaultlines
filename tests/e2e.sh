@@ -28,9 +28,9 @@ GOOGLE="http://127.0.0.1:9"  # set below, once the fake Google runs
 # Run vl (or any command) as one of the fake computers.
 as() {
   local who="$1"; shift
-  HOME="$ROOT/$who" VAULTLINES_HOME="$ROOT/$who/.vaultlines" CLAUDE_CONFIG_DIR="$ROOT/$who/.claude" \
-    VAULTLINES_NO_LAUNCHD=1 VAULTLINES_NO_NOTIFY=1 VAULTLINES_TEST_REMOTES=1 \
-    VAULTLINES_FAKE_GITHUB="$GH" VAULTLINES_FAKE_LOGIN="$who" VAULTLINES_FAKE_GOOGLE="$GOOGLE" \
+  HOME="$ROOT/$who" VL_HOME="$ROOT/$who/.vaultlines" CLAUDE_CONFIG_DIR="$ROOT/$who/.claude" \
+    VL_NO_LAUNCHD=1 VL_NO_NOTIFY=1 VL_TEST_REMOTES=1 \
+    VL_FAKE_GITHUB="$GH" VL_FAKE_LOGIN="$who" VL_FAKE_GOOGLE="$GOOGLE" \
     UV_CACHE_DIR="${UV_CACHE_DIR:-$REAL_HOME/.cache/uv}" HF_HOME="${HF_HOME:-$REAL_HOME/.cache/huggingface}" \
     GIT_CONFIG_GLOBAL="$ROOT/$who/.gitconfig" "$@"
 }
@@ -92,11 +92,11 @@ printf 'PK\005\006' > "$DRIVE/old.zip"
 repo acme/vault-hq '{"push": ["alice"], "read": ["bob"]}' vault.toml "about = \"The text of every file in Acme HQ, in Google Drive. Claude only reads it.\"
 
 [source]
-kind                 = \"gdrive\"
-folder_id            = \"$DRIVE\"
-max_size             = \"50M\"
-google_client_id     = \"1234-abc.apps.googleusercontent.com\"
-google_client_secret = \"GOCSPX-x\"
+kind          = \"gdrive\"
+folder_id     = \"$DRIVE\"
+max_size      = \"50M\"
+client_id     = \"1234-abc.apps.googleusercontent.com\"
+client_secret = \"GOCSPX-x\"
 "
 repo acme/vault-notes "$BOTH" README.md 'no vault.toml, so not a vault'
 for code in marketing billing acme-workspace both studio; do repo "acme/$code" "$BOTH" README.md "# $code"; done

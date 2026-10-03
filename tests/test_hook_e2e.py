@@ -38,7 +38,7 @@ def decision(out):
 
 
 def state_file(world, session_id) -> dict:
-    root = Path(os.environ["VAULTLINES_HOME"]) / "state" / "sessions"
+    root = Path(os.environ["VL_HOME"]) / "state" / "sessions"
     return json.loads((root / f"{session_id}.json").read_text())
 
 
