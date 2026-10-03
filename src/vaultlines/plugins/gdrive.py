@@ -55,13 +55,12 @@ Before you start, you need two things.
 
 1. A Google OAuth app, so vl can log in to Google. It takes about 5 minutes:
    a. Make a project: https://console.cloud.google.com/projectcreate
-      With a Workspace account (like you@company.com), for "Location", pick your organization.
+      With a company Gmail (like you@company.com), for "Location", pick your company.
    b. Turn on the Drive API: https://console.cloud.google.com/apis/library/drive.googleapis.com
       Check that your new project is selected at the top, then click "Enable".
    c. Set up the login screen: https://console.cloud.google.com/auth/overview, then "Get started".
-      With a Workspace account, Audience: "Internal". Then only your organization's accounts
-      can log in.
-      With a personal Gmail account, Audience: "External". Then, on the "Audience" page, click
+      With a company Gmail: Audience: "Internal". Then only your company's accounts can log in.
+      Or, with a personal Gmail: Audience: "External". Then, on the "Audience" page, click
       "Publish app": while the app is "Testing", Google ends each login after 7 days. When you
       log in, Google warns that it hasn't verified the app. It's your own app, so continue.
    d. Make the client: https://console.cloud.google.com/auth/clients, then "Create client".
@@ -70,8 +69,8 @@ Before you start, you need two things.
 
 2. A Google account for the refresh job to log in as. We recommend a bot account: an
    account that can open the vault's folder (or shared drive) and nothing else.
-   a. Make it. With Workspace: https://admin.google.com, then Directory > Users > "Add new
-      user". Without: a new Gmail account.
+   a. Make it. With a company Gmail: https://admin.google.com, then Directory > Users >
+      "Add new user". Or, with a personal Gmail: a new Gmail account.
    b. In Google Drive, share the folder with it as a "Viewer", or add it to the shared drive
       as a "Viewer". Share nothing else with it.
    Any account works, like your own. But anyone who can push to the vault's repo can use its

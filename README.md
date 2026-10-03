@@ -109,14 +109,16 @@ To start the refresh job on GitHub now: `gh workflow run vl-source.yml --repo ac
 | `google_client_id` | The client ID of a Google OAuth app of type "Desktop". |
 | `google_client_secret` | Its secret. Google doesn't treat a desktop app's secret as secret. |
 
-Before you start, you need two things. A Google Workspace account and a personal Gmail account both work.
+Before you start, you need two things. A company Gmail (Google Workspace, like you@company.com) and a personal Gmail both work.
 
 1. **A Google OAuth app** (about 5 minutes):
-   1. Make a project: <https://console.cloud.google.com/projectcreate>. With Workspace, for "Location", pick your organization.
+   1. Make a project: <https://console.cloud.google.com/projectcreate>. With a company Gmail, for "Location", pick your company.
    2. Turn on the Drive API: <https://console.cloud.google.com/apis/library/drive.googleapis.com>, then "Enable".
-   3. Set up the login screen: <https://console.cloud.google.com/auth/overview>, then "Get started". With Workspace, Audience: "Internal". With a personal Gmail account, Audience: "External", then "Publish app" on the "Audience" page. While the app is "Testing", Google ends each login after 7 days.
+   3. Set up the login screen: <https://console.cloud.google.com/auth/overview>, then "Get started".
+      - With a company Gmail: Audience: "Internal". Then only your company's accounts can log in.
+      - Or, with a personal Gmail: Audience: "External", then "Publish app" on the "Audience" page. While the app is "Testing", Google ends each login after 7 days. When you log in, Google warns that it hasn't verified the app. It's your own app, so continue.
    4. Make the client: <https://console.cloud.google.com/auth/clients>, then "Create client". Application type: "Desktop app". Google then shows the client ID and the client secret.
-2. **A Google account for the refresh job.** We recommend a bot account that can open only the vault's folder: make a user at <https://admin.google.com> (Directory > Users), or a new Gmail account. Share the folder with it as a "Viewer" (or add it to the shared drive as a "Viewer"), and share nothing else with it. Any account works, like your own. But anyone who can push to the vault's repo can use its login to read everything that account can read in Drive.
+2. **A Google account for the refresh job.** We recommend a bot account that can open only the vault's folder: with a company Gmail, make a user at <https://admin.google.com> (Directory > Users); or, with a personal Gmail, make a new Gmail account. Share the folder with it as a "Viewer" (or add it to the shared drive as a "Viewer"), and share nothing else with it. Any account works, like your own. But anyone who can push to the vault's repo can use its login to read everything that account can read in Drive.
 
 `vl vault create` asks you to log in as that account. It checks that the login can only read Drive. If you left out `--folder_id`, it lists what the account can open by name: its shared drives, the folders shared with it, and My Drive. You pick one, then go down its folders:
 
