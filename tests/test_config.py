@@ -106,7 +106,8 @@ def test_repo_names_ignore_case(home):
     ('reads     = ["kabir/vault-recipes"]', 'reads = "kabir/vault-recipes"', "should be a list"),
     ('reads     = ["kabir/vault-recipes"]', 'reads = ["mixim-ai/vault-public"]', "can't also be in reads"),
     ("auto_pull = true", "autopull = true", "unknown key"),
-    ("auto_pull = true", 'allow_vl_commands = "yes"', "allow_vl_commands: should be true or false"),
+    ("auto_pull = true", 'dangerously_skip_hook_guards = "yes"', "dangerously_skip_hook_guards: should be true or false"),
+    ("auto_pull = true", "allow_vl_commands = true", "allow_vl_commands: unknown key"),
     ("auto_pull = true", 'auto_pull = "yes"', "true or false"),
     ('reads = ["kabir/vault-side"]', 'auto_pull = true', "auto_pull needs one repo"),
     ('[folders."~/Documents/writing"]', '[folders."*"]', "a folder"),
@@ -134,6 +135,6 @@ def test_basic_memory_can_be_switched_off(home):
     assert "basic_memory = false" in config.config_path().read_text()
 
 
-def test_a_repo_can_allow_vl_commands(home):
-    write(home, '[repos."sarink/vaultlines"]\nallow_vl_commands = true\n')
-    assert config.load_file().repos["sarink/vaultlines"].allow_vl_commands is True
+def test_dev_mode_for_a_repo(home):
+    write(home, '[repos."sarink/vaultlines"]\ndangerously_skip_hook_guards = true\n')
+    assert config.load_file().repos["sarink/vaultlines"].dangerously_skip_hook_guards is True

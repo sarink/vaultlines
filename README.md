@@ -163,9 +163,9 @@ auto_pull = true                       # `git pull --ff-only` it on every sync
 [repos."acme/*"]
 reads = ["kabir/vault-side"]
 
-# Let sessions in a repo run vl commands without asking (for working on vl itself).
+# Dev mode, for working on vl itself: the hook guards nothing in sessions in this repo.
 [repos."sarink/vaultlines"]
-allow_vl_commands = true
+dangerously_skip_hook_guards = true
 
 # For folders that aren't in a repo of an org you joined.
 [folders."~/Documents/writing"]
@@ -183,7 +183,9 @@ Settings go at the top of the file: `sync_interval` (600 seconds), `check_interv
 
 Example: Claude reads `acme/vault-private` (Kabir and Lee). Then it wants to write to `acme/vault-public` (everyone at Acme). `vl` asks: "This session read acme-private. ana and raj would see this in acme-public."
 
-`vl` also protects itself. Claude can't write its records or touch your Google login. Changes to `config.toml`, and commands like `vl org` or `vl apply`, ask first unless your message mentions vl (or the repo has `allow_vl_commands = true`).
+`vl` also protects itself. Claude can't write its records or touch your Google login. Changes to `config.toml`, and commands like `vl org` or `vl apply`, ask first unless your message mentions vl.
+
+**Dev mode**, for working on vl itself: `dangerously_skip_hook_guards = true` in a repo's entry in `config.toml`. In sessions in that repo, the hook guards nothing: Claude can read and change every vault and all of `vl`'s own files, your Google logins too, and nothing asks first.
 
 Limits, honestly:
 

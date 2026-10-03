@@ -49,7 +49,7 @@ Every kind works the same way:
 | `check_interval` | `86400` | Seconds between checks with GitHub: new vaults, lost access, who can see each vault. |
 | `on_leak` | `"ask"` | `"block"` refuses a write that would show notes to new people, instead of asking. |
 | `basic_memory` | `true` | Set up Basic Memory. |
-| `[repos."OWNER/REPO"]` | | `writes` (a vault ID), `reads` (added to the owner's vaults), `auto_pull`, `allow_vl_commands` (sessions here run vl commands without asking). |
+| `[repos."OWNER/REPO"]` | | `writes` (a vault ID), `reads` (added to the owner's vaults), `auto_pull`, `dangerously_skip_hook_guards` (dev mode: the hook guards nothing in sessions here). |
 | `[repos."OWNER/*"]` | | `writes` and `reads` for every repo of the owner. A `[repos."OWNER/REPO"]` entry wins. |
 | `[folders."PATH"]` | | `writes` and `reads`, for folders outside repos of owners you joined. The closest entry counts. |
 
@@ -91,7 +91,8 @@ For every call:
 4. Writes to a `reads` vault always ask.
 5. A vault with a source (and its fetch folder) is read-only. Bash that mentions it counts as a read.
 6. `vl source fetch VAULT` in Bash is a read of that vault.
-7. vl's own files: writes to `~/.vaultlines/state` are blocked; any access to `~/.vaultlines/google` is blocked; edits to `config.toml`, to vl's hooks, and the commands `vl init`, `apply`, `uninstall`, `org`, `vault`, `source login`, `source refresh`, or `VAULTLINES_*` variables ask, unless your latest message mentions vl, or the repo's `[repos]` entry has `allow_vl_commands = true`.
+7. vl's own files: writes to `~/.vaultlines/state` are blocked; any access to `~/.vaultlines/google` is blocked; edits to `config.toml`, to vl's hooks, and the commands `vl init`, `apply`, `uninstall`, `org`, `vault`, `source login`, `source refresh`, or `VAULTLINES_*` variables ask, unless your latest message mentions vl.
+8. Dev mode: in a repo whose `[repos]` entry has `dangerously_skip_hook_guards = true`, the hook allows every call, and the briefing says so. It's read from `runtime.json` on each call, so it applies to running sessions after `vl apply`.
 
 The first session in a new clone counts the vault Basic Memory may have briefed it from before `vl` wrote the repo's block (your personal vault), so its first shared write may ask.
 

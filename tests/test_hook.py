@@ -657,29 +657,39 @@ def test_prompt_before_any_session_record(world):
     assert state["asked_vl"] is True and state["label"] == []
 
 
-def test_a_repo_can_allow_vl_commands(world):
-    world.runtime["repos"]["acme/site"] = {"writes": None, "reads": [], "allow_vl_commands": True}
+def test_dev_mode_skips_every_guard(world):
+    """For working on vl itself: dangerously_skip_hook_guards, and the hook allows every call
+    in that repo."""
+    world.runtime["repos"]["acme/site"] = {"writes": None, "reads": [], "dangerously_skip_hook_guards": True}
     s = Session(world, world.site)
+    out = json.dumps(s.event({"hook_event_name": "SessionStart", "source": "startup"}))
+    assert "dangerously_skip_hook_guards" in out and "Other vaults are blocked here" not in out
     s.event({"hook_event_name": "UserPromptSubmit", "prompt": "tidy up"})
-    for command in ("vl apply", "uv run vl vault create acme/vault-x", "VAULTLINES_HOME=/tmp/x vl status",
-                    "cat ~/.vaultlines/config.toml"):
-        assert s.call("Bash", command=command) is None, command
-    assert s.call("Edit", file_path=str(world.vl / "config.toml"), old_string="a", new_string="b") is None
-    # vl's records and Google logins stay off limits.
-    assert decision(s.call("Write", file_path=str(world.vl / "state" / "runtime.json"), content="{}")) == "deny"
-    assert decision(s.call("Read", file_path=str(world.vl / "google" / "x.json"))) == "deny"
-    # The leak checks still apply to what the command touches.
+    google = world.vl / "google" / "x.json"
+    for tool, args in (("Read", {"file_path": world.vault("sam-side", "idea.md")}),  # another owner's vault
+                       ("Read", {"file_path": str(google)}),
+                       ("Write", {"file_path": str(world.vl / "state" / "runtime.json"), "content": "{}"}),
+                       ("Write", {"file_path": world.vault("acme-drive", "x.md"), "content": "x"}),  # from a source
+                       ("Bash", {"command": f"vl apply && cat {google}"}),
+                       ("Bash", {"command": "VAULTLINES_HOME=/tmp/x vl status"}),
+                       ("Edit", {"file_path": str(world.vl / "config.toml"), "old_string": "a", "new_string": "b"}),
+                       ("mcp__basic-memory__read_note", {"identifier": "x", "project": "acme-founders"})):
+        assert s.call(tool, **args) is None, (tool, args)
     s.call("Read", file_path=world.vault("acme-founders", "plan.md"))
-    assert decision(s.call("Bash", command=f"cp ~/.vaultlines/vaults/acme/vault-founders/p.md {world.vault('acme-everyone')}/ && vl sync")) == "ask"
-    # Other repos still ask.
+    assert s.call("Write", file_path=world.vault("acme-everyone", "p.md"), content="x") is None  # no leak check
+    # Other repos are guarded as always.
     other = Session(world, world.legal)
     other.event({"hook_event_name": "UserPromptSubmit", "prompt": "tidy up"})
+    assert decision(other.call("Read", file_path=str(google))) == "deny"
     assert decision(other.call("Bash", command="vl apply")) == "ask"
 
 
-def test_allowing_vl_commands_takes_effect_in_running_sessions(world):
+def test_dev_mode_takes_effect_in_running_sessions(world):
     s = Session(world, world.blog)
     s.event({"hook_event_name": "UserPromptSubmit", "prompt": "tidy up"})
     assert decision(s.call("Bash", command="vl apply")) == "ask"
-    world.runtime["repos"]["sam/*"] = {"writes": None, "reads": [], "allow_vl_commands": True}
+    world.runtime["repos"]["sam/*"] = {"writes": None, "reads": [], "dangerously_skip_hook_guards": True}
     assert s.call("Bash", command="vl apply") is None
+    assert s.call("Read", file_path=str(world.vl / "google" / "x.json")) is None
+
+

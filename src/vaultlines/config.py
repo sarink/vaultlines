@@ -15,7 +15,7 @@ from . import vaults as vlt
 from .util import VlError, contract, expand, vl_home
 
 SETTINGS = {"sync_interval": 600, "check_interval": 86400, "on_leak": "ask", "basic_memory": True}
-RULE_KEYS = {"writes", "reads", "auto_pull", "allow_vl_commands"}
+RULE_KEYS = {"writes", "reads", "auto_pull", "dangerously_skip_hook_guards"}
 FOLDER_KEYS = {"writes", "reads"}
 ON_LEAK = ("ask", "block")
 REPO_KEY_RE = re.compile(r"^[A-Za-z0-9-]+/(?:\*|[A-Za-z0-9._-]+)$")
@@ -37,9 +37,11 @@ TEMPLATE = """\
 # reads     = ["kabir/vault-recipes"]      # added to the owner's vaults
 # auto_pull = true                         # `git pull --ff-only` it on every sync
 #
-# Let sessions in a repo run vl commands without asking (for working on vl itself):
+# Dev mode, for working on vl itself: in sessions in this repo, vl's hook guards nothing.
+# Claude can read and change every vault and all of vl's own files (your Google logins
+# too), and nothing asks first.
 # [repos."sarink/vaultlines"]
-# allow_vl_commands = true
+# dangerously_skip_hook_guards = true
 #
 # Let Claude read another owner's vault in every acme repo (owners are kept apart by default):
 # [repos."acme/*"]
@@ -64,7 +66,7 @@ class Rule:
     writes: str | None = None
     reads: list[str] = field(default_factory=list)
     auto_pull: bool = False
-    allow_vl_commands: bool = False  # sessions here may run vl commands without asking
+    dangerously_skip_hook_guards: bool = False  # dev mode: the hook guards nothing in sessions here
 
 
 @dataclass
@@ -146,7 +148,7 @@ def _rule(key: str, table: dict, where: str, allowed: set[str]) -> Rule:
     if writes and writes in reads:
         raise _err(f"{where}.reads", f"'{writes}' is the vault notes are saved to here, so it can't also be in reads")
     flags = {}
-    for flag in ("auto_pull", "allow_vl_commands"):
+    for flag in ("auto_pull", "dangerously_skip_hook_guards"):
         flags[flag] = table.get(flag, False)
         if not isinstance(flags[flag], bool):
             raise _err(f"{where}.{flag}", "should be true or false")

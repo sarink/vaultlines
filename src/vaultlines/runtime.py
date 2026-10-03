@@ -79,8 +79,8 @@ def _rule(cfg: Config, rule, where: str, lost: set[str], warnings: list[str]) ->
         writes = None
     reads = [s for s in (ref(r, "reads") for r in rule.reads) if s]
     out = {"writes": writes, "reads": reads}
-    if getattr(rule, "allow_vl_commands", False):
-        out["allow_vl_commands"] = True
+    if getattr(rule, "dangerously_skip_hook_guards", False):
+        out["dangerously_skip_hook_guards"] = True
     return out
 
 

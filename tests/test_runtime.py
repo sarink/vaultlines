@@ -91,8 +91,10 @@ def test_stale(tmp_path, monkeypatch):
     assert "config.toml changed" in runtime.stale({"version": runtime.VERSION, "written_at": 0})
 
 
-def test_allow_vl_commands_is_in_the_repos_entry(tmp_path, monkeypatch):
+def test_dev_mode_is_in_the_repos_entry(tmp_path, monkeypatch):
     cfg = make(tmp_path, monkeypatch)
-    cfg.repos["kabir/vaultlines"] = Rule("kabir/vaultlines", allow_vl_commands=True)
+    cfg.repos["kabir/vaultlines"] = Rule("kabir/vaultlines", dangerously_skip_hook_guards=True)
     out = runtime.build(cfg, {}, {})
-    assert out["repos"]["kabir/vaultlines"] == {"writes": None, "reads": [], "allow_vl_commands": True}
+    assert out["repos"]["kabir/vaultlines"] == {"writes": None, "reads": [], "dangerously_skip_hook_guards": True}
+    cfg.repos["kabir/vaultlines"] = Rule("kabir/vaultlines")
+    assert runtime.build(cfg, {}, {})["repos"]["kabir/vaultlines"] == {"writes": None, "reads": []}

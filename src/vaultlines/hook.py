@@ -283,7 +283,10 @@ def briefing_text(rules: dict, runtime: dict) -> str | None:
             text = vaults.get(r, {}).get("about") or ""
             shown.append(f"`{r}`" + (f" ({_shorten(text)})" if text else ""))
         lines.append(f"You can also read: {', '.join(shown)}. Writing to those asks first.")
-    lines.append(" ".join(["Other vaults are blocked here.", *extra]))
+    if _skips_guards(runtime, rules):
+        lines.append(" ".join([DEV_MODE, *extra]))
+    else:
+        lines.append(" ".join(["Other vaults are blocked here.", *extra]))
     for v in [w, *reads]:
         source = plugins.SOURCES.get(vaults.get(v, {}).get("source"))
         if source and hasattr(source, "source_briefing"):
@@ -337,6 +340,8 @@ def _leak_reason(state: dict, runtime: dict, target: str, people: list[str], ext
 VL_COMMAND_RE = re.compile(
     r"(?:^|[\s;&|(`])(?:\S*/)?vl\s+(init|apply|uninstall|org|vault|source\s+(?:login|refresh))\b")
 VL_ENV_RE = re.compile(r"\bVAULTLINES_[A-Z_]+")
+DEV_MODE = ("Dev mode: vl's hook guards nothing here (dangerously_skip_hook_guards in config.toml), so every "
+            "vault and vl's own files are open.")
 GOOGLE = "Google logins are for vl only. To get an original from Drive, run `vl source fetch OWNER/REPO PATH`."
 
 
@@ -442,24 +447,24 @@ def _prompt(event: dict, runtime: dict, state: dict | None, project_dir: str) ->
     return state
 
 
-def _allows_vl_commands(runtime: dict, rules: dict | None) -> bool:
-    """config.toml lets sessions in this repo run vl commands without asking. Read from
-    runtime.json on every call, so a change applies to running sessions too."""
+def _skips_guards(runtime: dict, rules: dict | None) -> bool:
+    """Dev mode: config.toml says the hook guards nothing in this repo (dangerously_skip_hook_guards).
+    Read from runtime.json on every call, so a change applies to running sessions too."""
     repo = (rules or {}).get("repo")
     if not repo:
         return False
     repos = runtime.get("repos") or {}
-    return any((repos.get(key) or {}).get("allow_vl_commands") for key in (repo, repo.split("/")[0] + "/*"))
+    return any((repos.get(key) or {}).get("dangerously_skip_hook_guards") for key in (repo, repo.split("/")[0] + "/*"))
 
 
 def _pre_tool(event: dict, runtime: dict, state: dict | None, project_dir: str):
+    if _skips_guards(runtime, (state or {}).get("rules") or resolve(project_dir, runtime)):
+        return None, None
     guard = self_guard(event, runtime)
     if guard and guard[0] == "deny":
         return _pre("deny", guard[1]), None
     if guard and state and state.get("asked_vl"):
         guard = None  # you asked for this in your latest message
-    if guard and _allows_vl_commands(runtime, (state or {}).get("rules") or resolve(project_dir, runtime)):
-        guard = None
     out, new_state = _vault_rules(event, runtime, state, project_dir)
     if not guard:
         return out, new_state
