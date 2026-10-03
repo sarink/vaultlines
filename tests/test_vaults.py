@@ -9,10 +9,10 @@ from vaultlines.vaults import parse_vault_toml, short_name, short_names
 
 
 @pytest.mark.parametrize("vault_id, short", [
-    ("mixim-ai/vault-public", "mixim-ai-public"),
+    ("acme/vault-public", "acme-public"),
     ("kabir/vault-kabir-personal", "kabir-personal"),
-    ("mixim-ai/vault-kabir-personal", "mixim-ai-kabir-personal"),
-    ("mixim-ai/vault-mixim-ai-hq", "mixim-ai-hq"),
+    ("acme/vault-kabir-personal", "acme-kabir-personal"),
+    ("acme/vault-acme-hq", "acme-hq"),
     ("acme/vault-acme", "acme"),
     ("acme/recipes", "acme-recipes"),
     ("acme/vault-acmecorp", "acme-acmecorp"),  # only a whole word counts as the owner
@@ -30,13 +30,13 @@ def test_short_names_never_collide():
 
 
 @pytest.mark.parametrize("vault_id, ok", [
-    ("mixim-ai/vault-public", True),
+    ("acme/vault-public", True),
     ("acme/recipes", True),
-    ("Mixim-AI/vault-public", False),  # vl writes IDs in lowercase
-    ("mixim-ai", False),
-    ("mixim-ai/vault-public/x", False),
+    ("ACME/vault-public", False),  # vl writes IDs in lowercase
+    ("acme", False),
+    ("acme/vault-public/x", False),
     ("../vault-x", False),
-    ("mixim-ai/..", False),
+    ("acme/..", False),
 ])
 def test_valid_id(vault_id, ok):
     assert vaults.valid_id(vault_id) is ok
@@ -44,16 +44,16 @@ def test_valid_id(vault_id, ok):
 
 def test_parse_a_full_vault_toml():
     info, problems = parse_vault_toml('''
-about      = "Notes everyone at Mixim can see."
-notes_from = ["mixim-ai/mixim", "Mixim-AI/Marketing"]
+about      = "Notes everyone at Acme can see."
+notes_from = ["acme/acme", "ACME/Marketing"]
 
 [source]
 kind         = "gdrive"
 shared_drive = "0AHF"
 ''')
     assert problems == []
-    assert info.about == "Notes everyone at Mixim can see."
-    assert info.notes_from == ["mixim-ai/mixim", "mixim-ai/marketing"]  # GitHub names ignore case
+    assert info.about == "Notes everyone at Acme can see."
+    assert info.notes_from == ["acme/acme", "acme/marketing"]  # GitHub names ignore case
     assert info.source == {"kind": "gdrive", "shared_drive": "0AHF"}
 
 
@@ -65,7 +65,7 @@ def test_an_empty_vault_toml_is_fine():
 @pytest.mark.parametrize("text, problem", [
     ("about = ", "vault.toml:"),
     ("about = 5", "about: should be text"),
-    ('notes_from = "mixim-ai/x"', "notes_from: should be a list"),
+    ('notes_from = "acme/x"', "notes_from: should be a list"),
     ('notes_from = ["not a repo"]', "notes_from: 'not a repo' isn't OWNER/REPO"),
     ('colour = "red"', "colour: unknown key"),
     ('source = "gdrive"', "source: should be a table"),
@@ -98,33 +98,33 @@ def _repo(path, origin=None):
 def test_on_disk(tmp_path, monkeypatch):
     monkeypatch.setenv("VAULTLINES_HOME", str(tmp_path))
     root = tmp_path / "vaults"
-    _repo(root / "mixim-ai" / "vault-public", "https://github.com/mixim-ai/vault-public.git")
-    (root / "mixim-ai" / "vault-public" / "vault.toml").write_text('about = "Everyone."\nnotes_from = ["mixim-ai/x"]\n')
-    _repo(root / "mixim-ai" / "vault-kabir-personal")
+    _repo(root / "acme" / "vault-public", "https://github.com/acme/vault-public.git")
+    (root / "acme" / "vault-public" / "vault.toml").write_text('about = "Everyone."\nnotes_from = ["acme/x"]\n')
+    _repo(root / "acme" / "vault-kabir-personal")
     _repo(root / "kabir" / "vault-recipes")
-    (root / "mixim-ai" / "not-a-repo").mkdir()
+    (root / "acme" / "not-a-repo").mkdir()
     (root / "empty-owner").mkdir()
     (root / ".DS_Store").write_text("")
     found = vaults.on_disk()
-    assert sorted(found) == ["kabir/vault-recipes", "mixim-ai/vault-kabir-personal", "mixim-ai/vault-public"]
-    public = found["mixim-ai/vault-public"]
-    assert (public.owner, public.repo, public.about, public.notes_from) == ("mixim-ai", "vault-public", "Everyone.", ["mixim-ai/x"])
-    assert public.remote == "https://github.com/mixim-ai/vault-public.git"
-    assert found["mixim-ai/vault-kabir-personal"].remote is None
-    assert vaults.joined() == ["empty-owner", "kabir", "mixim-ai"]
+    assert sorted(found) == ["acme/vault-kabir-personal", "acme/vault-public", "kabir/vault-recipes"]
+    public = found["acme/vault-public"]
+    assert (public.owner, public.repo, public.about, public.notes_from) == ("acme", "vault-public", "Everyone.", ["acme/x"])
+    assert public.remote == "https://github.com/acme/vault-public.git"
+    assert found["acme/vault-kabir-personal"].remote is None
+    assert vaults.joined() == ["acme", "empty-owner", "kabir"]
 
 
 def test_personal_id():
-    assert vaults.personal_id("mixim-ai", "kabir") == "mixim-ai/vault-kabir-personal"
+    assert vaults.personal_id("acme", "kabir") == "acme/vault-kabir-personal"
     assert vaults.personal_id("kabir", "kabir") == "kabir/vault-kabir-personal"
 
 
 @pytest.mark.parametrize("url, found", [
-    ("https://github.com/mixim-ai/vault-public.git", "mixim-ai/vault-public"),
-    ("git@github.com:Mixim-AI/vault-public", "mixim-ai/vault-public"),
-    ("ssh://git@github.com/mixim-ai/vault-public/", "mixim-ai/vault-public"),
-    ("https://gitlab.com/mixim-ai/vault-public.git", None),
-    ("file:///tmp/remotes/mixim-ai/vault-public.git", None),
+    ("https://github.com/acme/vault-public.git", "acme/vault-public"),
+    ("git@github.com:ACME/vault-public", "acme/vault-public"),
+    ("ssh://git@github.com/acme/vault-public/", "acme/vault-public"),
+    ("https://gitlab.com/acme/vault-public.git", None),
+    ("file:///tmp/remotes/acme/vault-public.git", None),
 ])
 def test_remote_id(url, found):
     assert vaults.remote_id(url) == found
@@ -132,4 +132,4 @@ def test_remote_id(url, found):
 
 def test_file_remotes_count_in_tests(monkeypatch):
     monkeypatch.setenv("VAULTLINES_TEST_REMOTES", "1")
-    assert vaults.remote_id("file:///tmp/remotes/mixim-ai/vault-public.git") == "mixim-ai/vault-public"
+    assert vaults.remote_id("file:///tmp/remotes/acme/vault-public.git") == "acme/vault-public"

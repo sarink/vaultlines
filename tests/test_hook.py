@@ -73,7 +73,7 @@ def others(writes):
     ("api", "acme-everyone", others("acme-everyone")),       # a folder inside that repo
     ("app", "acme-everyone", others("acme-everyone")),       # cloned anywhere
     ("legal", "acme-founders", others("acme-founders")),
-    ("sheety", "acme-sam-personal", others("acme-sam-personal")),  # in no notes_from
+    ("billing", "acme-sam-personal", others("acme-sam-personal")),  # in no notes_from
     ("both", "acme-sam-personal", others("acme-sam-personal")),    # in two notes_from
     ("blog", "sam-personal", ["sam-recipes", "sam-side"]),   # your own account
     ("oss", "sam-personal", []),                             # an owner you didn't join
@@ -179,7 +179,7 @@ def test_writing_a_reads_vault_always_asks(world):
 
 
 def test_unknown_audience_read_counts_as_only_you(world):
-    s = Session(world, world.sheety)
+    s = Session(world, world.billing)
     s.call("Grep", pattern="x", path=world.vault("acme-handbook"))
     assert s.label == lbl.ONLY_YOU
     assert s.state["read"] == ["acme-handbook"]
@@ -193,8 +193,8 @@ def test_public_read_changes_nothing(world):
 
 
 def test_writing_an_unknown_audience_vault_after_a_restricted_read_asks(world):
-    world.runtime["repos"]["acme/sheety"] = {"writes": "acme-handbook", "reads": []}
-    s = Session(world, world.sheety)
+    world.runtime["repos"]["acme/billing"] = {"writes": "acme-handbook", "reads": []}
+    s = Session(world, world.billing)
     s.call("Read", file_path=world.vault("acme-founders", "x.md"))
     out = s.call("Write", file_path=world.vault("acme-handbook", "x.md"))
     assert decision(out) == "ask"
@@ -202,7 +202,7 @@ def test_writing_an_unknown_audience_vault_after_a_restricted_read_asks(world):
 
 
 def test_only_you_vault_takes_any_write(world):
-    s = Session(world, world.sheety)
+    s = Session(world, world.billing)
     s.call("Read", file_path=world.vault("acme-founders", "x.md"))
     assert decision(s.call("Write", file_path=world.vault("acme-sam-personal", "x.md"))) is None
 

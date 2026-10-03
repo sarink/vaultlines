@@ -49,7 +49,7 @@ class World:
         self.api = self.site / "api"  # a folder in the site repo
         self.app = git_repo(self.home / "elsewhere" / "app-clone", "https://github.com/acme/app.git")  # everyone
         self.legal = git_repo(code / "legal", "https://github.com/acme/legal")  # notes_from: founders
-        self.sheety = git_repo(code / "sheety", "https://github.com/acme/sheety.git")  # in no notes_from
+        self.billing = git_repo(code / "billing", "https://github.com/acme/billing.git")  # in no notes_from
         self.both = git_repo(code / "both", "https://github.com/acme/both.git")  # in two notes_from
         self.blog = git_repo(code / "blog", "https://github.com/sam/blog.git")  # sam's own account
         self.oss = git_repo(code / "linux", "https://github.com/torvalds/linux.git")  # an owner sam didn't join

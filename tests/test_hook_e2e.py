@@ -131,10 +131,10 @@ def test_bad_stdin_is_harmless(live):
 
 def test_parallel_calls_dont_lose_reads(live):
     w = live
-    hook(w, start("par", w.sheety))
-    events = [tool("par", w.sheety, "Read", {"file_path": w.vault(v, "x.md")})
+    hook(w, start("par", w.billing))
+    events = [tool("par", w.billing, "Read", {"file_path": w.vault(v, "x.md")})
               for v in ("acme-founders", "acme-slack", "acme-docs", "acme-handbook")]
-    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(w.sheety)}
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(w.billing)}
     procs = [subprocess.Popen([VL, "hook"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=env)
              for _ in events]
     for p, e in zip(procs, events):

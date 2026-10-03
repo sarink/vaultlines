@@ -17,8 +17,8 @@ from vaultlines.util import VlError
 FIXTURES = Path(__file__).parent / "fixtures"
 needs_tools = pytest.mark.skipif(not (shutil.which("rclone") and shutil.which("uv")),
                                  reason="rclone or uv isn't installed")
-VAULT = "mixim-ai/vault-hq"
-SOURCE = {"kind": "gdrive", "folder_id": "0AHF8p0HI9kM1Uk9PVA",
+VAULT = "acme/vault-hq"
+SOURCE = {"kind": "gdrive", "folder_id": "0AACMEHQ1234567890",
           "max_size": "50M", "google_client_id": "1234-abc.apps.googleusercontent.com",
           "google_client_secret": "GOCSPX-x"}
 
@@ -48,7 +48,7 @@ def test_source_problems(change, problem):
 
 @pytest.mark.parametrize("text, wanted", [
     ("1AbC-d_9", "1AbC-d_9"),
-    ("  0AHF8p0HI9kM1Uk9PVA ", "0AHF8p0HI9kM1Uk9PVA"),
+    ("  0AACMEHQ1234567890 ", "0AACMEHQ1234567890"),
     ("https://drive.google.com/drive/folders/1AbC-d_9", "1AbC-d_9"),
     ("https://drive.google.com/drive/u/1/folders/1AbC-d_9?usp=sharing", "1AbC-d_9"),
     ("https://drive.google.com/open?id=1AbC-d_9", "1AbC-d_9"),
@@ -75,14 +75,14 @@ def _conf(place):
 
 
 def test_the_rclone_config_holds_the_token_and_the_folder():
-    text, conf = _conf({"id": "0AHF8p0HI9kM1Uk9PVA", "drive_id": "0AHF8p0HI9kM1Uk9PVA"})  # a whole shared drive
+    text, conf = _conf({"id": "0AACMEHQ1234567890", "drive_id": "0AACMEHQ1234567890"})  # a whole shared drive
     assert text.startswith("[gdrive]\ntype = drive\nscope = drive.readonly\n")
     assert conf["client_id"] == "1234-abc.apps.googleusercontent.com"
-    assert conf["team_drive"] == "0AHF8p0HI9kM1Uk9PVA" and "root_folder_id" not in conf
+    assert conf["team_drive"] == "0AACMEHQ1234567890" and "root_folder_id" not in conf
     token = json.loads(conf["token"])
     assert token["access_token"] == "ya29.ACCESS" and token["refresh_token"] == "1//REFRESH"
-    _, conf = _conf({"id": "FIN", "drive_id": "0AHF8p0HI9kM1Uk9PVA"})  # a folder in a shared drive
-    assert (conf["team_drive"], conf["root_folder_id"]) == ("0AHF8p0HI9kM1Uk9PVA", "FIN")
+    _, conf = _conf({"id": "FIN", "drive_id": "0AACMEHQ1234567890"})  # a folder in a shared drive
+    assert (conf["team_drive"], conf["root_folder_id"]) == ("0AACMEHQ1234567890", "FIN")
     _, conf = _conf({"id": "BOARD", "drive_id": ""})  # a folder in someone's My Drive
     assert conf["root_folder_id"] == "BOARD" and "team_drive" not in conf
 
@@ -232,7 +232,7 @@ def test_paths_vl_never_writes(path):
 def test_frontmatter_round_trip():
     meta = {"title": 'Runway "2025"', "type": "drive-file", "source": "gdrive", "id": "1AbC",
             "path": "Finance/Runway.xlsx", "modified": "2024-12-18T19:43:47Z", "text": "full",
-            "fetch": 'vl source fetch mixim-ai/vault-hq "Finance/Runway.xlsx"'}
+            "fetch": 'vl source fetch acme/vault-hq "Finance/Runway.xlsx"'}
     text = drive.render_note(meta, [], "## Summary\n| a |\n")
     assert text.startswith('---\ntitle: "Runway \\"2025\\""\ntype: "drive-file"\n')
     parsed, extra, body = drive.parse_note(text)
@@ -337,7 +337,7 @@ def test_a_run_writes_one_note_per_file(local_drive):
     meta, _, body = note(vault, "Finance/Runway.xlsx.md")
     assert meta["title"] == "Runway" and meta["type"] == "drive-file" and meta["source"] == "gdrive"
     assert meta["path"] == "Finance/Runway.xlsx" and meta["text"] == "full" and meta["converter"] == drive.CONVERTER
-    assert meta["fetch"] == 'vl source fetch mixim-ai/vault-hq "Finance/Runway.xlsx"'
+    assert meta["fetch"] == 'vl source fetch acme/vault-hq "Finance/Runway.xlsx"'
     assert meta["md5"] and meta["modified"] and "spreadsheetml" in meta["mime"]
     assert "id" not in meta and "url" not in meta  # a local folder has no Drive IDs
     assert "Comptroller" in body  # in the second tab
@@ -350,7 +350,7 @@ def test_a_run_writes_one_note_per_file(local_drive):
     for rel, status in (("archive.zip.md", "not convertible"), ("huge.pdf.md", "too big"), ("blank.txt.md", "no text")):
         meta, _, body = note(vault, rel)
         assert meta["text"] == status, rel
-        assert body.count("\n") == 1 and "vl source fetch mixim-ai/vault-hq" in body
+        assert body.count("\n") == 1 and "vl source fetch acme/vault-hq" in body
     assert note(vault, "broken.pdf.md")[0]["text"].startswith("failed: ")
     assert (vault.path / "readme.md").read_text() == "# By hand\n"
 
@@ -397,7 +397,7 @@ def test_a_move_keeps_the_body_and_basic_memorys_keys(local_drive, monkeypatch):
     assert not (vault.path / "Finance").exists()
     meta, extra, body = note(vault, "Archive/2024 Runway.xlsx.md")
     assert meta["path"] == "Archive/2024 Runway.xlsx" and meta["title"] == "2024 Runway"
-    assert meta["fetch"] == 'vl source fetch mixim-ai/vault-hq "Archive/2024 Runway.xlsx"'
+    assert meta["fetch"] == 'vl source fetch acme/vault-hq "Archive/2024 Runway.xlsx"'
     assert meta["url"] == "https://drive.google.com/open?id=1RUNWAY"
     assert extra == ["tags:", "- cash"] and body == "edited by BM\n"
 

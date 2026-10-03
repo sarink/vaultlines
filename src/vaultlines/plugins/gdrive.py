@@ -4,7 +4,7 @@ A vault's vault.toml says where its notes come from:
 
     [source]
     kind                 = "gdrive"
-    folder_id            = "0AHF8p0HI9kM1Uk9PVA"   # Acme HQ
+    folder_id            = "0AACMEHQ1234567890"   # Acme HQ
     max_size             = "50M"          # bigger files get a note without text
     google_client_id     = "1234-abc.apps.googleusercontent.com"
     google_client_secret = "GOCSPX-…"     # a desktop app's; Google doesn't treat it as secret

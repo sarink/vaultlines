@@ -75,10 +75,10 @@ def test_a_fake_google_must_be_on_this_computer(monkeypatch, url):
 
 @pytest.fixture
 def folders(fake):
-    """Mixim HQ (a shared drive) with Finance/2024, a folder shared with the account, and one
+    """Acme HQ (a shared drive) with Finance/2024, a folder shared with the account, and one
     in its My Drive."""
-    fake.folder("FIN", "Finance", parent="0AHF8p0HI9kM1Uk9PVA", drive="0AHF8p0HI9kM1Uk9PVA")
-    fake.folder("F24", "2024", parent="FIN", drive="0AHF8p0HI9kM1Uk9PVA")
+    fake.folder("FIN", "Finance", parent="0AACMEHQ1234567890", drive="0AACMEHQ1234567890")
+    fake.folder("F24", "2024", parent="FIN", drive="0AACMEHQ1234567890")
     fake.folder("BOARD", "Board decks", shared=True)
     fake.folder("MINE", "Recipes", parent="MYDRIVE")
     fake.file("PDF1", "a.pdf", "application/pdf")
@@ -86,7 +86,7 @@ def folders(fake):
 
 
 def test_shared_drives(fake):
-    assert [d["name"] for d in google.shared_drives(ACCESS)] == ["Mixim HQ", "Other"]
+    assert [d["name"] for d in google.shared_drives(ACCESS)] == ["Acme HQ", "Other"]
 
 
 def names(found):
@@ -94,17 +94,17 @@ def names(found):
 
 
 def test_folders_in_a_drive_a_folder_or_shared_with_the_account(folders):
-    assert names(google.folders(ACCESS, "0AHF8p0HI9kM1Uk9PVA", drive_id="0AHF8p0HI9kM1Uk9PVA")) == [("FIN", "Finance")]
-    assert names(google.folders(ACCESS, "FIN", drive_id="0AHF8p0HI9kM1Uk9PVA")) == [("F24", "2024")]
+    assert names(google.folders(ACCESS, "0AACMEHQ1234567890", drive_id="0AACMEHQ1234567890")) == [("FIN", "Finance")]
+    assert names(google.folders(ACCESS, "FIN", drive_id="0AACMEHQ1234567890")) == [("F24", "2024")]
     assert names(google.folders(ACCESS, shared=True)) == [("BOARD", "Board decks")]
     assert names(google.folders(ACCESS, google.my_drive(ACCESS))) == [("MINE", "Recipes")]
     assert google.my_drive(ACCESS) == "MYDRIVE"
 
 
 @pytest.mark.parametrize("wanted, place", [
-    ("0AHF8p0HI9kM1Uk9PVA", {"id": "0AHF8p0HI9kM1Uk9PVA", "name": "Mixim HQ", "drive_id": "0AHF8p0HI9kM1Uk9PVA",
-                             "drive_name": "Mixim HQ"}),
-    ("F24", {"id": "F24", "name": "2024", "drive_id": "0AHF8p0HI9kM1Uk9PVA", "drive_name": "Mixim HQ"}),
+    ("0AACMEHQ1234567890", {"id": "0AACMEHQ1234567890", "name": "Acme HQ", "drive_id": "0AACMEHQ1234567890",
+                             "drive_name": "Acme HQ"}),
+    ("F24", {"id": "F24", "name": "2024", "drive_id": "0AACMEHQ1234567890", "drive_name": "Acme HQ"}),
     ("BOARD", {"id": "BOARD", "name": "Board decks", "drive_id": "", "drive_name": ""}),
 ])
 def test_find_a_folder_or_shared_drive_by_id(folders, wanted, place):

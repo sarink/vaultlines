@@ -30,7 +30,7 @@ class FakeGoogle:
     def __init__(self):
         self.scope = READONLY
         self.client_id = "1234-abc.apps.googleusercontent.com"
-        self.drives = [{"id": "0AHF8p0HI9kM1Uk9PVA", "name": "Mixim HQ"}, {"id": "0BOTHER", "name": "Other"}]
+        self.drives = [{"id": "0AACMEHQ1234567890", "name": "Acme HQ"}, {"id": "0BOTHER", "name": "Other"}]
         self.files: dict[str, dict] = {}  # id -> {"name", "mimeType", "data", "status", folders: "parent", ...}
         self.folder("MYDRIVE", "My Drive")  # the account's own My Drive
         self.requests: list[str] = []

@@ -9,12 +9,12 @@ GOOD = """
 sync_interval  = 300
 on_leak        = "block"
 
-[repos."mixim-ai/website"]
-writes    = "mixim-ai/vault-public"
+[repos."acme/website"]
+writes    = "acme/vault-public"
 reads     = ["kabir/vault-recipes"]
 auto_pull = true
 
-[repos."mixim-ai/*"]
+[repos."acme/*"]
 reads = ["kabir/vault-side"]
 
 [folders."~/Documents/writing"]
@@ -79,17 +79,17 @@ def test_load_a_good_config(home):
     write(home, GOOD)
     cfg = config.load_file()
     assert (cfg.sync_interval, cfg.on_leak) == (300, "block")
-    website = cfg.repos["mixim-ai/website"]
-    assert (website.writes, website.reads, website.auto_pull) == ("mixim-ai/vault-public", ["kabir/vault-recipes"], True)
-    assert cfg.repos["mixim-ai/*"].writes is None
+    website = cfg.repos["acme/website"]
+    assert (website.writes, website.reads, website.auto_pull) == ("acme/vault-public", ["kabir/vault-recipes"], True)
+    assert cfg.repos["acme/*"].writes is None
     writing = cfg.folders[str(home / "Documents" / "writing")]
     assert (writing.writes, writing.reads) == ("kabir/vault-recipes", [])
     assert cfg.folders[str(home / "notes")].writes is None
 
 
 def test_repo_names_ignore_case(home):
-    write(home, '[repos."Mixim-AI/Website"]\nwrites = "Mixim-AI/vault-public"\n')
-    assert config.load_file().repos["mixim-ai/website"].writes == "mixim-ai/vault-public"
+    write(home, '[repos."ACME/Website"]\nwrites = "ACME/vault-public"\n')
+    assert config.load_file().repos["acme/website"].writes == "acme/vault-public"
 
 
 @pytest.mark.parametrize("old, new, message", [
@@ -99,12 +99,12 @@ def test_repo_names_ignore_case(home):
     ("sync_interval  = 300", "colour = 1", "colour: unknown key"),
     ("sync_interval  = 300", "basic_memory = 1", "basic_memory: should be true or false"),
     ("sync_interval  = 300", '[vaults."kabir/vault-recipes"]', "vaults: unknown key"),
-    ('[repos."mixim-ai/website"]', '[repos."website"]', "OWNER/REPO"),
-    ('[repos."mixim-ai/*"]', '[repos."*/*"]', "OWNER/REPO"),
-    ('writes    = "mixim-ai/vault-public"', 'writes = "vault-public"', "OWNER/REPO"),
-    ('writes    = "mixim-ai/vault-public"', 'writes = ["mixim-ai/vault-public"]', "should be one vault"),
+    ('[repos."acme/website"]', '[repos."website"]', "OWNER/REPO"),
+    ('[repos."acme/*"]', '[repos."*/*"]', "OWNER/REPO"),
+    ('writes    = "acme/vault-public"', 'writes = "vault-public"', "OWNER/REPO"),
+    ('writes    = "acme/vault-public"', 'writes = ["acme/vault-public"]', "should be one vault"),
     ('reads     = ["kabir/vault-recipes"]', 'reads = "kabir/vault-recipes"', "should be a list"),
-    ('reads     = ["kabir/vault-recipes"]', 'reads = ["mixim-ai/vault-public"]', "can't also be in reads"),
+    ('reads     = ["kabir/vault-recipes"]', 'reads = ["acme/vault-public"]', "can't also be in reads"),
     ("auto_pull = true", "autopull = true", "unknown key"),
     ("auto_pull = true", 'dangerously_skip_hook_guards = "yes"', "dangerously_skip_hook_guards: should be true or false"),
     ("auto_pull = true", "allow_vl_commands = true", "allow_vl_commands: unknown key"),

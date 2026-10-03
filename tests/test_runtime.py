@@ -8,7 +8,7 @@ from vaultlines.vaults import Info, Vault
 
 def make(tmp_path, monkeypatch) -> Config:
     monkeypatch.setenv("VAULTLINES_HOME", str(tmp_path / "vl"))
-    cfg = Config(me="kabir", owners=["kabir", "mixim-ai"])
+    cfg = Config(me="kabir", owners=["kabir", "acme"])
 
     def add(vid, about="", notes_from=(), source=None, remote=True):
         path = tmp_path / "vl" / "vaults" / vid
@@ -17,70 +17,70 @@ def make(tmp_path, monkeypatch) -> Config:
                                 Info(about, list(notes_from), source))
 
     add("kabir/vault-kabir-personal", "Kabir's personal notes.", remote=False)
-    add("mixim-ai/vault-public", "Everyone.", ["mixim-ai/marketing", "mixim-ai/studio", "kabir/blog"])
-    add("mixim-ai/vault-private", "Founders.", ["mixim-ai/jorge-ip-theft", "mixim-ai/studio"])
-    add("mixim-ai/vault-hq", "Drive.", ["mixim-ai/hq-notes"], source={"kind": "gdrive"})
-    add("mixim-ai/vault-kabir-personal", remote=False)
+    add("acme/vault-public", "Everyone.", ["acme/marketing", "acme/studio", "kabir/blog"])
+    add("acme/vault-private", "Founders.", ["acme/legal-case", "acme/studio"])
+    add("acme/vault-hq", "Drive.", ["acme/hq-notes"], source={"kind": "gdrive"})
+    add("acme/vault-kabir-personal", remote=False)
     add("kabir/vault-recipes", remote=False)
     return cfg
 
 
 def test_build_v4(tmp_path, monkeypatch):
     cfg = make(tmp_path, monkeypatch)
-    cfg.repos["mixim-ai/website"] = Rule("mixim-ai/website", "mixim-ai/vault-public", ["kabir/vault-recipes"], True)
+    cfg.repos["acme/website"] = Rule("acme/website", "acme/vault-public", ["kabir/vault-recipes"], True)
     cfg.folders[str(tmp_path / "writing")] = Rule(str(tmp_path / "writing"), "kabir/vault-recipes", [])
     warnings = []
-    auds = {"mixim-ai/vault-public": Audience("people", ("kabir", "ana"))}
+    auds = {"acme/vault-public": Audience("people", ("kabir", "ana"))}
     data = {"basic-memory": {"plugin": True, "projects": {}}}
     out = runtime.build(cfg, auds, data, warnings=warnings)
     assert out["version"] == runtime.VERSION == 4
     assert out["me"] == "kabir"
-    assert sorted(out["vaults"]) == ["kabir-personal", "kabir-recipes", "mixim-ai-hq", "mixim-ai-kabir-personal",
-                                     "mixim-ai-private", "mixim-ai-public"]
-    public = out["vaults"]["mixim-ai-public"]
-    assert public["id"] == "mixim-ai/vault-public" and public["about"] == "Everyone."
-    assert public["paths"] == [str((tmp_path / "vl" / "vaults" / "mixim-ai" / "vault-public").resolve())]
+    assert sorted(out["vaults"]) == ["acme-hq", "acme-kabir-personal", "acme-private", "acme-public",
+                                     "kabir-personal", "kabir-recipes"]
+    public = out["vaults"]["acme-public"]
+    assert public["id"] == "acme/vault-public" and public["about"] == "Everyone."
+    assert public["paths"] == [str((tmp_path / "vl" / "vaults" / "acme" / "vault-public").resolve())]
     assert public["audience"] == {"kind": "people", "logins": ["kabir", "ana"], "reason": ""}
-    assert out["vaults"]["mixim-ai-private"]["audience"]["reason"] == "not checked yet"
-    hq = out["vaults"]["mixim-ai-hq"]
+    assert out["vaults"]["acme-private"]["audience"]["reason"] == "not checked yet"
+    hq = out["vaults"]["acme-hq"]
     assert hq["source"] == "gdrive"
-    assert hq["fetch"] == [str((tmp_path / "vl").resolve() / "cache" / "fetch" / "mixim-ai" / "vault-hq")]
+    assert hq["fetch"] == [str((tmp_path / "vl").resolve() / "cache" / "fetch" / "acme" / "vault-hq")]
     assert "source" not in public
 
-    mixim = out["owners"]["mixim-ai"]
-    assert mixim["personal"] == "mixim-ai-kabir-personal"
-    assert mixim["vaults"] == ["mixim-ai-hq", "mixim-ai-kabir-personal", "mixim-ai-private", "mixim-ai-public"]
-    assert mixim["notes_from"] == {"mixim-ai/jorge-ip-theft": "mixim-ai-private", "mixim-ai/marketing": "mixim-ai-public"}
-    assert mixim["conflicts"] == {"mixim-ai/studio": ["mixim-ai-private", "mixim-ai-public"]}
+    acme = out["owners"]["acme"]
+    assert acme["personal"] == "acme-kabir-personal"
+    assert acme["vaults"] == ["acme-hq", "acme-kabir-personal", "acme-private", "acme-public"]
+    assert acme["notes_from"] == {"acme/legal-case": "acme-private", "acme/marketing": "acme-public"}
+    assert acme["conflicts"] == {"acme/studio": ["acme-private", "acme-public"]}
     assert out["owners"]["kabir"] == {"personal": "kabir-personal", "vaults": ["kabir-personal", "kabir-recipes"],
                                       "notes_from": {}, "conflicts": {}}
-    assert out["repos"] == {"mixim-ai/website": {"writes": "mixim-ai-public", "reads": ["kabir-recipes"]}}
+    assert out["repos"] == {"acme/website": {"writes": "acme-public", "reads": ["kabir-recipes"]}}
     assert out["folders"] == {str(tmp_path / "writing"): {"writes": "kabir-recipes", "reads": []}}
     assert out["default"] == {"writes": "kabir-personal", "reads": []}
     assert out["plugins"]["basic-memory"]["tool_prefixes"] == ["mcp__basic-memory__"]
     assert any("kabir/blog, which belongs to another owner" in w for w in warnings)
-    assert any("mixim-ai/vault-hq: notes_from is ignored" in w for w in warnings)
+    assert any("acme/vault-hq: notes_from is ignored" in w for w in warnings)
 
 
 def test_config_entries_for_vaults_that_arent_here_are_left_out(tmp_path, monkeypatch):
     cfg = make(tmp_path, monkeypatch)
-    cfg.repos["mixim-ai/x"] = Rule("mixim-ai/x", "mixim-ai/vault-gone", ["mixim-ai/vault-hq", "nobody/vault-y"])
-    cfg.repos["mixim-ai/y"] = Rule("mixim-ai/y", "mixim-ai/vault-hq")
+    cfg.repos["acme/x"] = Rule("acme/x", "acme/vault-gone", ["acme/vault-hq", "nobody/vault-y"])
+    cfg.repos["acme/y"] = Rule("acme/y", "acme/vault-hq")
     warnings = []
     out = runtime.build(cfg, {}, {}, warnings=warnings)
-    assert out["repos"]["mixim-ai/x"] == {"writes": None, "reads": ["mixim-ai-hq"]}
-    assert out["repos"]["mixim-ai/y"] == {"writes": None, "reads": []}
-    assert any("no vault mixim-ai/vault-gone" in w for w in warnings)
-    assert any("mixim-ai/vault-hq comes from gdrive, so notes can't be saved there" in w for w in warnings)
+    assert out["repos"]["acme/x"] == {"writes": None, "reads": ["acme-hq"]}
+    assert out["repos"]["acme/y"] == {"writes": None, "reads": []}
+    assert any("no vault acme/vault-gone" in w for w in warnings)
+    assert any("acme/vault-hq comes from gdrive, so notes can't be saved there" in w for w in warnings)
 
 
 def test_lost_vaults_stay_known_but_arent_used(tmp_path, monkeypatch):
     cfg = make(tmp_path, monkeypatch)
-    out = runtime.build(cfg, {}, {}, lost={"mixim-ai/vault-private"})
-    assert out["vaults"]["mixim-ai-private"]["lost"] is True
-    assert "mixim-ai-private" not in out["owners"]["mixim-ai"]["vaults"]
-    assert out["owners"]["mixim-ai"]["notes_from"] == {"mixim-ai/marketing": "mixim-ai-public",
-                                                       "mixim-ai/studio": "mixim-ai-public"}
+    out = runtime.build(cfg, {}, {}, lost={"acme/vault-private"})
+    assert out["vaults"]["acme-private"]["lost"] is True
+    assert "acme-private" not in out["owners"]["acme"]["vaults"]
+    assert out["owners"]["acme"]["notes_from"] == {"acme/marketing": "acme-public",
+                                                       "acme/studio": "acme-public"}
 
 
 def test_stale(tmp_path, monkeypatch):

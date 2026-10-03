@@ -414,10 +414,21 @@ def _create_with_source(args, vault_id: str, notes_from: list[str]) -> None:
     owner = vault_id.split("/")[0]
     _record(owner, [*_discovery().get(owner, {}).get("vaults", []), vault_id])
     _apply(config.load())
-    say(f"\nMade {vault_id}. Its refresh job on GitHub refreshes it from {kind.NAME} every hour.")
-    say(f"The first refresh is starting. Watch it with `gh run watch --repo {vault_id}`.")
-    say(f"To start it again: `gh workflow run {WORKFLOW_FILE} --repo {vault_id}`.")
-    say("Give people read access to the repo on GitHub; `vl sync` finds it for them.")
+    say(f"\nMade {vault_id}. The vault is refreshed every hour by a GitHub Action that reads {kind.NAME}.")
+    say(f"To refresh manually, run: `vl source refresh {vault_id} [--force]`.")
+    say(_who_can_access(vault_id))
+
+
+def _who_can_access(vault_id: str) -> str:
+    try:
+        a = github.audience(vault_id)
+    except (VlError, github.Unreachable) as e:
+        return f"vl couldn't ask GitHub who can access this vault ({e})."
+    if a.kind == "people":
+        return f"These users can access this vault: {', '.join(a.logins) or 'nobody'}."
+    if a.kind == "everyone":
+        return "Everyone can access this vault: it's a public repo."
+    return f"vl couldn't tell who can access this vault: {a.reason}."
 
 
 def cmd_vault_publish(args) -> None:

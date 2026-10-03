@@ -17,8 +17,8 @@ from vaultlines.plugins import gdrive
 from vaultlines.util import fetch_dir, refresh_dir, vaults_dir
 
 CLIENT = "1234-abc.apps.googleusercontent.com"
-HQ = "0AHF8p0HI9kM1Uk9PVA"  # the shared drive Mixim HQ, in the fake Google
-SOURCE = f'''about = "The text of every file in Mixim HQ, in Google Drive. Claude only reads it."
+HQ = "0AACMEHQ1234567890"  # the shared drive Acme HQ, in the fake Google
+SOURCE = f'''about = "The text of every file in Acme HQ, in Google Drive. Claude only reads it."
 
 [source]
 kind                 = "gdrive"
@@ -27,14 +27,14 @@ max_size             = "50M"
 google_client_id     = "{CLIENT}"
 google_client_secret = "GOCSPX-x"
 '''
-CREATE = ["vault", "create", "mixim-ai/vault-hq", "--source", "gdrive",
+CREATE = ["vault", "create", "acme/vault-hq", "--source", "gdrive",
           "--folder_id", f"https://drive.google.com/drive/folders/{HQ}?usp=sharing",
           "--google_client_id", CLIENT, "--google_client_secret", "GOCSPX-x"]
 
 
 def note(path, file_id, mime="application/pdf"):
     meta = {"title": "x", "type": "drive-file", "source": "gdrive", "id": file_id, "path": path, "mime": mime,
-            "fetch": gdrive.fetch_command("mixim-ai/vault-hq", path)}
+            "fetch": gdrive.fetch_command("acme/vault-hq", path)}
     return gdrive.render_note(meta, [], "text\n")
 
 
@@ -48,11 +48,11 @@ def google_fake(monkeypatch):
 
 @pytest.fixture
 def hq(fake_github, computer, google_fake):
-    """mixim-ai with a vault from Google Drive, already refreshed by its refresh job."""
+    """acme with a vault from Google Drive, already refreshed by its refresh job."""
     gh = fake_github
-    gh.org("mixim-ai", ["alice", "bob"])
-    gh.vault("mixim-ai/vault-public", ["alice", "bob"])
-    gh.repo("mixim-ai/vault-hq", {"push": ["alice"], "read": ["bob"]},
+    gh.org("acme", ["alice", "bob"])
+    gh.vault("acme/vault-public", ["alice", "bob"])
+    gh.repo("acme/vault-hq", {"push": ["alice"], "read": ["bob"]},
             {"vault.toml": SOURCE, "Finance/Runway.xlsx.md": note("Finance/Runway.xlsx", "F1"),
              "Team/Plan.md": note("Team/Plan.md", "G1", "text/markdown"),
              "Legal/Secret.pdf.md": note("Legal/Secret.pdf", "F403")})
@@ -66,42 +66,45 @@ def hq(fake_github, computer, google_fake):
 # ---------------------------------------------------------------- vl vault create --source KIND
 
 def test_create_makes_the_vault_its_fill_job_and_secret(fake_github, computer, google_fake, capsys):
-    fake_github.org("mixim-ai", ["alice"])
-    vl("org", "join", "mixim-ai")
+    fake_github.org("acme", ["alice"])
+    vl("org", "join", "acme")
     assert vl(*CREATE) == 0
     out, err = capsys.readouterr()
     assert "SECRET" not in out + err
     data = fake_github.load()
-    assert data["repos"]["mixim-ai/vault-hq"] == {"push": ["alice"]}  # a vault with a source is always published
-    assert data["secrets"] == {"mixim-ai/vault-hq": {"VL_SOURCE_TOKEN": REFRESH}}
-    assert data["workflow_runs"] == [{"repo": "mixim-ai/vault-hq", "workflow": "vl-source.yml", "inputs": {}}]
-    bare = fake_github.root / "mixim-ai" / "vault-hq.git"
+    assert data["repos"]["acme/vault-hq"] == {"push": ["alice"]}  # a vault with a source is always published
+    assert data["secrets"] == {"acme/vault-hq": {"VL_SOURCE_TOKEN": REFRESH}}
+    assert data["workflow_runs"] == [{"repo": "acme/vault-hq", "workflow": "vl-source.yml", "inputs": {}}]
+    bare = fake_github.root / "acme" / "vault-hq.git"
     shown = subprocess.run(["git", "--git-dir", str(bare), "show", "HEAD:vault.toml"], capture_output=True, text=True)
     info, problems = vaults.parse_vault_toml(shown.stdout)
     assert problems == []
-    assert info.about == "The text of every file in Mixim HQ, in Google Drive. Claude only reads it."
+    assert info.about == "The text of every file in Acme HQ, in Google Drive. Claude only reads it."
     # Every key is the flag that set it; a folder's URL becomes its ID.
     assert info.source == {"kind": "gdrive", "folder_id": HQ, "max_size": "50M",
                            "google_client_id": CLIENT, "google_client_secret": "GOCSPX-x"}
-    assert f'folder_id            = "{HQ}"   # Mixim HQ\n' in shown.stdout
+    assert f'folder_id            = "{HQ}"   # Acme HQ\n' in shown.stdout
     assert list(info.source) == ["kind", "folder_id", "max_size", "google_client_id", "google_client_secret"]
     workflow = subprocess.run(["git", "--git-dir", str(bare), "show", "HEAD:.github/workflows/vl-source.yml"],
                               capture_output=True, text=True).stdout
     assert workflow == cli.source_workflow(gdrive)
     assert "vl source refresh --fetch-only" in workflow and "rclone" in workflow
-    assert "gh workflow run vl-source.yml --repo mixim-ai/vault-hq" in out  # to start it again by hand
-    assert (vaults_dir() / "mixim-ai" / "vault-hq" / "vault.toml").exists()
+    assert out.splitlines()[-3:] == [
+        "Made acme/vault-hq. The vault is refreshed every hour by a GitHub Action that reads Google Drive.",
+        "To refresh manually, run: `vl source refresh acme/vault-hq [--force]`.",
+        "These users can access this vault: alice."]
+    assert (vaults_dir() / "acme" / "vault-hq" / "vault.toml").exists()
     assert google.load_token(CLIENT) is None  # the bot's login goes to GitHub only
 
 
 def test_create_takes_every_key_of_the_kind(fake_github, computer, google_fake):
-    fake_github.org("mixim-ai", ["alice"])
-    vl("org", "join", "mixim-ai")
+    fake_github.org("acme", ["alice"])
+    vl("org", "join", "acme")
     google_fake.folder("FIN", "Finance", parent=HQ, drive=HQ)
     assert vl(*CREATE, "--folder_id", "FIN", "--max_size", "10M", "--about", "Finance.") == 0
-    info = vaults.read("mixim-ai/vault-hq", vaults_dir() / "mixim-ai" / "vault-hq").info
+    info = vaults.read("acme/vault-hq", vaults_dir() / "acme" / "vault-hq").info
     assert (info.about, info.source["folder_id"], info.source["max_size"]) == ("Finance.", "FIN", "10M")
-    assert '"FIN"   # Finance, in Mixim HQ' in (vaults_dir() / "mixim-ai" / "vault-hq" / "vault.toml").read_text()
+    assert '"FIN"   # Finance, in Acme HQ' in (vaults_dir() / "acme" / "vault-hq" / "vault.toml").read_text()
 
 
 def test_help_for_a_kind_lists_only_its_keys(capsys):
@@ -143,28 +146,28 @@ def test_create_without_a_terminal_says_what_is_missing_and_how_to_get_it(fake_g
                                                                           monkeypatch, capsys):
     from vaultlines import util
 
-    fake_github.org("mixim-ai", ["alice"])
-    vl("org", "join", "mixim-ai")
+    fake_github.org("acme", ["alice"])
+    vl("org", "join", "acme")
     monkeypatch.setattr(util, "interactive", lambda: False)
-    assert vl("vault", "create", "mixim-ai/vault-hq", "--source", "gdrive") == 1
+    assert vl("vault", "create", "acme/vault-hq", "--source", "gdrive") == 1
     err = capsys.readouterr().err
     assert "--folder_id" in err and "--google_client_id" in err and "--google_client_secret" in err
     assert "console.cloud.google.com/auth/clients" in err  # how to get them
-    assert google_fake.requests == [] and "mixim-ai/vault-hq" not in fake_github.load()["repos"]
+    assert google_fake.requests == [] and "acme/vault-hq" not in fake_github.load()["repos"]
 
 
 def test_create_asks_for_what_is_missing(fake_github, computer, google_fake, answers, capsys):
-    fake_github.org("mixim-ai", ["alice"])
-    vl("org", "join", "mixim-ai")
+    fake_github.org("acme", ["alice"])
+    vl("org", "join", "acme")
     given, asked = answers
-    given += ["vault-hq", "mixim-ai/vault-hq", CLIENT, "GOCSPX-x", "1"]  # a bad name first; then the first drive
+    given += ["vault-hq", "acme/vault-hq", CLIENT, "GOCSPX-x", "1"]  # a bad name first; then the first drive
     assert vl("vault", "create", "--source", "gdrive") == 0
     out = capsys.readouterr().out
     assert "console.cloud.google.com/auth/clients" in out  # the steps, before the questions
     assert "OWNER/vault-NAME" in asked[0] and "OWNER/vault-NAME" in asked[1] and "OWNER/vault-NAME" in out
     assert "google_client_id" in asked[2] and "google_client_secret" in asked[3] and "folder" in asked[4]
-    assert "1. Mixim HQ (shared drive)" in out and "2. Other (shared drive)" in out and "3. My Drive" in out
-    info = vaults.read("mixim-ai/vault-hq", vaults_dir() / "mixim-ai" / "vault-hq").info
+    assert "1. Acme HQ (shared drive)" in out and "2. Other (shared drive)" in out and "3. My Drive" in out
+    info = vaults.read("acme/vault-hq", vaults_dir() / "acme" / "vault-hq").info
     assert info.source["folder_id"] == HQ  # it has no folders, so there's nothing more to ask
     assert (info.source["google_client_id"], info.source["google_client_secret"]) == (CLIENT, "GOCSPX-x")
 
@@ -179,42 +182,42 @@ def test_create_without_a_vault_or_a_terminal_says_to_give_one(fake_github, comp
 
 
 def test_create_asks_again_for_a_bad_answer(fake_github, computer, google_fake, answers, capsys):
-    fake_github.org("mixim-ai", ["alice"])
-    vl("org", "join", "mixim-ai")
+    fake_github.org("acme", ["alice"])
+    vl("org", "join", "acme")
     given, asked = answers
     given += ["", CLIENT, "9", "Other (shared drive)"]
-    assert vl("vault", "create", "mixim-ai/vault-hq", "--source", "gdrive", "--google_client_secret", "s") == 0
+    assert vl("vault", "create", "acme/vault-hq", "--source", "gdrive", "--google_client_secret", "s") == 0
     assert len(asked) == 4
-    info = vaults.read("mixim-ai/vault-hq", vaults_dir() / "mixim-ai" / "vault-hq").info
+    info = vaults.read("acme/vault-hq", vaults_dir() / "acme" / "vault-hq").info
     assert info.source["folder_id"] == "0BOTHER"
 
 
 def test_create_walks_the_folders_and_can_go_back(fake_github, computer, google_fake, answers, capsys):
-    fake_github.org("mixim-ai", ["alice"])
-    vl("org", "join", "mixim-ai")
+    fake_github.org("acme", ["alice"])
+    vl("org", "join", "acme")
     google_fake.folder("FIN", "Finance", parent=HQ, drive=HQ)
     google_fake.folder("F24", "2024", parent="FIN", drive=HQ)
     google_fake.folder("LEGAL", "Legal", parent=HQ, drive=HQ)
     google_fake.folder("BOARD", "Board decks", shared=True)
     given, _ = answers
-    # Mixim HQ, Finance/, back up, Finance/ again, then all of it.
+    # Acme HQ, Finance/, back up, Finance/ again, then all of it.
     given += ["1", "2", "(back)", "Finance/", "1"]
-    assert vl("vault", "create", "mixim-ai/vault-hq", "--source", "gdrive", "--google_client_id", CLIENT,
+    assert vl("vault", "create", "acme/vault-hq", "--source", "gdrive", "--google_client_id", CLIENT,
               "--google_client_secret", "s") == 0
     out = capsys.readouterr().out
     assert "3. Board decks (folder shared with you)" in out and "4. My Drive" in out
-    assert "1. All of Mixim HQ" in out and "2. Finance/" in out and "3. Legal/" in out
-    assert "1. All of Mixim HQ/Finance" in out and "2. 2024/" in out and "3. (back)" in out
-    path = vaults_dir() / "mixim-ai" / "vault-hq"
-    info = vaults.read("mixim-ai/vault-hq", path).info
+    assert "1. All of Acme HQ" in out and "2. Finance/" in out and "3. Legal/" in out
+    assert "1. All of Acme HQ/Finance" in out and "2. 2024/" in out and "3. (back)" in out
+    path = vaults_dir() / "acme" / "vault-hq"
+    info = vaults.read("acme/vault-hq", path).info
     assert info.source["folder_id"] == "FIN"
-    assert info.about == "The text of every file in Mixim HQ/Finance, in Google Drive. Claude only reads it."
-    assert '"FIN"   # Mixim HQ/Finance' in (path / "vault.toml").read_text()
+    assert info.about == "The text of every file in Acme HQ/Finance, in Google Drive. Claude only reads it."
+    assert '"FIN"   # Acme HQ/Finance' in (path / "vault.toml").read_text()
 
 
 def test_create_asks_nothing_when_every_key_is_given(fake_github, computer, google_fake, answers, capsys):
-    fake_github.org("mixim-ai", ["alice"])
-    vl("org", "join", "mixim-ai")
+    fake_github.org("acme", ["alice"])
+    vl("org", "join", "acme")
     assert vl(*CREATE) == 0
     assert answers[1] == [] and "console.cloud.google.com" not in capsys.readouterr().out
 
@@ -223,33 +226,33 @@ def test_create_asks_nothing_when_every_key_is_given(fake_github, computer, goog
     (["--source", "nope"], "no source kind 'nope'. Kinds: gdrive"),
     (["--source", "gdrive", "--folder_id", "1NOPE", "--google_client_id", CLIENT, "--google_client_secret", "s"],
      "This Google account can't open the folder 1NOPE"),
-    (CREATE[3:] + ["--folder_id", "Mixim HQ"], "folder_id: should be a Drive folder's URL or ID"),
+    (CREATE[3:] + ["--folder_id", "Acme HQ"], "folder_id: should be a Drive folder's URL or ID"),
     (CREATE[3:][:4] + ["--google_client_id", CLIENT], "Missing --google_client_secret"),
-    (CREATE[3:] + ["--notes_from", "mixim-ai/marketing"], "a vault with a source can't take notes"),
+    (CREATE[3:] + ["--notes_from", "acme/marketing"], "a vault with a source can't take notes"),
 ])
 def test_create_refuses(fake_github, computer, google_fake, capsys, args, message):
-    fake_github.org("mixim-ai", ["alice"])
-    vl("org", "join", "mixim-ai")
-    code = vl("vault", "create", "mixim-ai/vault-hq", *args)
+    fake_github.org("acme", ["alice"])
+    vl("org", "join", "acme")
+    code = vl("vault", "create", "acme/vault-hq", *args)
     assert code != 0
     assert message in capsys.readouterr().err
-    assert "mixim-ai/vault-hq" not in fake_github.load()["repos"]
+    assert "acme/vault-hq" not in fake_github.load()["repos"]
 
 
 def test_create_refuses_a_bot_that_can_change_drive(fake_github, computer, google_fake, capsys):
-    fake_github.org("mixim-ai", ["alice"])
-    vl("org", "join", "mixim-ai")
+    fake_github.org("acme", ["alice"])
+    vl("org", "join", "acme")
     google_fake.scope = "https://www.googleapis.com/auth/drive"
     assert vl(*CREATE) == 1
     assert "can change Google Drive" in capsys.readouterr().err
-    assert "mixim-ai/vault-hq" not in fake_github.load()["repos"]
+    assert "acme/vault-hq" not in fake_github.load()["repos"]
 
 
 def test_create_checks_github_can_take_a_workflow_first(fake_github, computer, google_fake, monkeypatch, capsys):
     from vaultlines import github
 
-    fake_github.org("mixim-ai", ["alice"])
-    vl("org", "join", "mixim-ai")
+    fake_github.org("acme", ["alice"])
+    vl("org", "join", "acme")
     monkeypatch.setattr(github, "scopes", lambda: {"repo", "admin:org"})
     assert vl(*CREATE) == 1
     assert "gh auth refresh -h github.com -s workflow" in capsys.readouterr().err
@@ -259,89 +262,89 @@ def test_create_checks_github_can_take_a_workflow_first(fake_github, computer, g
 # ---------------------------------------------------------------- org join, fetch, login, refresh
 
 def test_joining_tells_you_how_to_log_in_for_originals(hq, capsys):
-    assert vl("org", "join", "mixim-ai") == 0
-    assert "vl source login mixim-ai/vault-hq" in capsys.readouterr().out
-    assert runtime.load()["vaults"]["mixim-ai-hq"]["source"] == "gdrive"
+    assert vl("org", "join", "acme") == 0
+    assert "vl source login acme/vault-hq" in capsys.readouterr().out
+    assert runtime.load()["vaults"]["acme-hq"]["source"] == "gdrive"
 
 
 def test_fetch_logs_in_and_downloads_one_original(hq, capsys):
-    vl("org", "join", "mixim-ai")
+    vl("org", "join", "acme")
     capsys.readouterr()
-    assert vl("source", "fetch", "mixim-ai/vault-hq", "Finance/Runway.xlsx") == 0
+    assert vl("source", "fetch", "acme/vault-hq", "Finance/Runway.xlsx") == 0
     out, err = capsys.readouterr()
-    path = fetch_dir("mixim-ai/vault-hq") / "Finance" / "Runway.xlsx"
+    path = fetch_dir("acme/vault-hq") / "Finance" / "Runway.xlsx"
     assert out.strip().splitlines()[-1] == str(path)
     assert path.read_bytes() == b"PK original bytes"
     assert not os.access(path, os.W_OK)  # a read-only copy
     assert time.time() - path.stat().st_mtime < 60  # so `vl sync` keeps it for a day
     assert "SECRET" not in out + err
     assert google.load_token(CLIENT) == REFRESH
-    assert vl("source", "fetch", "mixim-ai-hq", "Finance/Runway.xlsx") == 0  # by short name, again
+    assert vl("source", "fetch", "acme-hq", "Finance/Runway.xlsx") == 0  # by short name, again
 
 
 def test_fetch_exports_google_files(hq, capsys):
-    vl("org", "join", "mixim-ai")
-    assert vl("source", "fetch", "mixim-ai/vault-hq", "Team/Plan.md") == 0
-    path = fetch_dir("mixim-ai/vault-hq") / "Team" / "Plan.docx"
+    vl("org", "join", "acme")
+    assert vl("source", "fetch", "acme/vault-hq", "Team/Plan.md") == 0
+    path = fetch_dir("acme/vault-hq") / "Team" / "Plan.docx"
     assert capsys.readouterr().out.strip().splitlines()[-1] == str(path)
     assert path.read_bytes().startswith(b"EXPORTED application/vnd.openxmlformats-officedocument.wordprocessingml")
 
 
 @pytest.mark.parametrize("path, message", [
-    ("Legal/Secret.pdf", ("You can read mixim-ai-hq, but your Google account can't open this file in Drive. "
+    ("Legal/Secret.pdf", ("You can read acme-hq, but your Google account can't open this file in Drive. "
                           f"Ask for access to it: https://drive.google.com/drive/folders/{HQ}")),
-    ("Nope.pdf", "No note in mixim-ai/vault-hq has the path 'Nope.pdf'"),
+    ("Nope.pdf", "No note in acme/vault-hq has the path 'Nope.pdf'"),
     ("../etc/passwd", "isn't a path inside the drive"),
 ])
 def test_fetch_refuses(hq, capsys, path, message):
-    vl("org", "join", "mixim-ai")
+    vl("org", "join", "acme")
     google.save_token(CLIENT, REFRESH)
     capsys.readouterr()
-    assert vl("source", "fetch", "mixim-ai/vault-hq", path) == 1
+    assert vl("source", "fetch", "acme/vault-hq", path) == 1
     err = capsys.readouterr().err
     assert message in err and "SECRET" not in err
 
 
 def test_a_deleted_file_is_no_access_too(hq, google_fake, capsys):
-    vl("org", "join", "mixim-ai")
+    vl("org", "join", "acme")
     del google_fake.files["F1"]
-    assert vl("source", "fetch", "mixim-ai/vault-hq", "Finance/Runway.xlsx") == 1
+    assert vl("source", "fetch", "acme/vault-hq", "Finance/Runway.xlsx") == 1
     assert "can't open this file in Drive" in capsys.readouterr().err
 
 
 def test_source_commands_need_a_vault_with_a_source(hq, capsys):
-    vl("org", "join", "mixim-ai")
-    for args in (["fetch", "mixim-ai/vault-public", "x.pdf"], ["login", "mixim-ai/vault-public"],
-                 ["refresh", "mixim-ai/vault-public"]):
+    vl("org", "join", "acme")
+    for args in (["fetch", "acme/vault-public", "x.pdf"], ["login", "acme/vault-public"],
+                 ["refresh", "acme/vault-public"]):
         assert vl("source", *args) == 1
-        assert "mixim-ai/vault-public has no source" in capsys.readouterr().err
+        assert "acme/vault-public has no source" in capsys.readouterr().err
 
 
 def test_fetch_refuses_a_login_that_can_change_drive(hq, google_fake, capsys):
-    vl("org", "join", "mixim-ai")
+    vl("org", "join", "acme")
     google.save_token(CLIENT, REFRESH)
     google_fake.scope = "https://www.googleapis.com/auth/drive"
-    assert vl("source", "fetch", "mixim-ai/vault-hq", "Finance/Runway.xlsx") == 1
+    assert vl("source", "fetch", "acme/vault-hq", "Finance/Runway.xlsx") == 1
     assert "can change Google Drive" in capsys.readouterr().err
-    assert not (fetch_dir("mixim-ai/vault-hq") / "Finance" / "Runway.xlsx").exists()
+    assert not (fetch_dir("acme/vault-hq") / "Finance" / "Runway.xlsx").exists()
 
 
 def test_login(hq):
-    vl("org", "join", "mixim-ai")
-    assert vl("source", "login", "mixim-ai/vault-hq") == 0
+    vl("org", "join", "acme")
+    assert vl("source", "login", "acme/vault-hq") == 0
     assert google.load_token(CLIENT) == REFRESH
 
 
 def test_sync_only_pulls_a_vault_with_a_source(hq, capsys):
-    vl("org", "join", "mixim-ai")
-    path = vaults_dir() / "mixim-ai" / "vault-hq"
+    vl("org", "join", "acme")
+    path = vaults_dir() / "acme" / "vault-hq"
     (path / "Finance" / "Runway.xlsx.md").write_text("edited here\n")
-    work = hq.root / ".work" / "mixim-ai" / "vault-hq"
+    work = hq.root / ".work" / "acme" / "vault-hq"
     commit_files(work, {"Team/New.md": note("Team/New.md", "N1")}, "Update from Google Drive")
     capsys.readouterr()
     assert vl("sync") == 0
     out = capsys.readouterr().out
-    assert "mixim-ai/vault-hq: synced. This vault is refreshed from its source, so local changes were moved" in out
+    assert "acme/vault-hq: synced. This vault is refreshed from its source, so local changes were moved" in out
     assert (path / "Team" / "New.md").exists()
     assert (path / "Finance" / "Runway.xlsx.md").read_text() != "edited here\n"
     assert vl("status") == 0
@@ -368,14 +371,14 @@ needs_tools = pytest.mark.skipif(not (shutil.which("rclone") and shutil.which("u
 
 def _checkout(fake_github, tmp_path, toml, files=None):
     """A clone of the vault, like the refresh job's checkout."""
-    fake_github.repo("mixim-ai/vault-hq", ["alice"], {"vault.toml": toml, **(files or {})})
+    fake_github.repo("acme/vault-hq", ["alice"], {"vault.toml": toml, **(files or {})})
     work = tmp_path / "checkout"
-    subprocess.run(["git", "clone", "-q", fake_github.url("mixim-ai/vault-hq"), str(work)], check=True)
+    subprocess.run(["git", "clone", "-q", fake_github.url("acme/vault-hq"), str(work)], check=True)
     return work
 
 
 def _bare_log(fake_github):
-    bare = fake_github.root / "mixim-ai" / "vault-hq.git"
+    bare = fake_github.root / "acme" / "vault-hq.git"
     return subprocess.run(["git", "--git-dir", str(bare), "log", "--format=%s"], capture_output=True,
                           text=True).stdout.splitlines()
 
@@ -396,10 +399,10 @@ def test_refresh_in_the_vault_fetches_converts_commits_and_pushes(fake_github, c
     assert vl("source", "refresh") == 0
     assert "1 new" in capsys.readouterr().out
     assert _bare_log(fake_github)[0] == "Update from Google Drive"
-    bare = fake_github.root / "mixim-ai" / "vault-hq.git"
+    bare = fake_github.root / "acme" / "vault-hq.git"
     shown = subprocess.run(["git", "--git-dir", str(bare), "show", "HEAD:Team/Plan.md"], capture_output=True, text=True)
-    assert 'fetch: "vl source fetch mixim-ai/vault-hq \\"Team/Plan.md\\""' in shown.stdout
-    assert not refresh_dir("mixim-ai/vault-hq").exists()  # nothing is left behind
+    assert 'fetch: "vl source fetch acme/vault-hq \\"Team/Plan.md\\""' in shown.stdout
+    assert not refresh_dir("acme/vault-hq").exists()  # nothing is left behind
     assert vl("source", "refresh") == 0
     assert "no changes" in capsys.readouterr().out
 
@@ -411,21 +414,21 @@ def test_refresh_in_two_steps_and_pull_before_push(fake_github, computer, tmp_pa
     assert vl("source", "refresh", "--fetch-only") == 0
     out = capsys.readouterr().out
     assert "Fetched 1 file" in out and "vl source refresh --convert-only" in out
-    assert (refresh_dir("mixim-ai/vault-hq")).is_dir()
+    assert (refresh_dir("acme/vault-hq")).is_dir()
     assert _bare_log(fake_github) == ["seed"]  # nothing committed yet
     other = tmp_path / "other"
-    subprocess.run(["git", "clone", "-q", fake_github.url("mixim-ai/vault-hq"), str(other)], check=True)
+    subprocess.run(["git", "clone", "-q", fake_github.url("acme/vault-hq"), str(other)], check=True)
     commit_files(other, {"Other.md": "by someone else\n"}, "Another refresh")
     assert vl("source", "refresh", "--convert-only") == 0
     assert "1 new" in capsys.readouterr().out
     assert _bare_log(fake_github)[:2] == ["Update from Google Drive", "Another refresh"]
-    assert not refresh_dir("mixim-ai/vault-hq").exists()
+    assert not refresh_dir("acme/vault-hq").exists()
 
 
 def test_convert_only_needs_a_fetch_first(fake_github, computer, tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(_checkout(fake_github, tmp_path, SOURCE))
     assert vl("source", "refresh", "--convert-only") == 1
-    assert "Nothing fetched for mixim-ai/vault-hq. Run `vl source refresh --fetch-only` first." in capsys.readouterr().err
+    assert "Nothing fetched for acme/vault-hq. Run `vl source refresh --fetch-only` first." in capsys.readouterr().err
     assert vl("source", "refresh", "--convert-only", "--force") == 1
     assert "--force goes with the fetch" in capsys.readouterr().err
 
@@ -455,15 +458,15 @@ def test_refresh_without_a_login_says_how_to_get_one(fake_github, computer, goog
     monkeypatch.delenv("VL_SOURCE_TOKEN", raising=False)
     assert vl("source", "refresh", "--fetch-only") == 1
     err = capsys.readouterr().err
-    assert "set VL_SOURCE_TOKEN, or run `vl source login mixim-ai/vault-hq`" in err
+    assert "set VL_SOURCE_TOKEN, or run `vl source login acme/vault-hq`" in err
 
 
 def test_refresh_a_vault_by_name_with_your_own_login(hq, monkeypatch, fetched, capsys):
-    vl("org", "join", "mixim-ai")
+    vl("org", "join", "acme")
     monkeypatch.delenv("VL_SOURCE_TOKEN", raising=False)
     google.save_token(CLIENT, REFRESH)
-    assert vl("source", "refresh", "mixim-ai/vault-hq", "--fetch-only") == 0
-    assert "team_drive = 0AHF8p0HI9kM1Uk9PVA\n" in fetched["conf"]  # found by its name
+    assert vl("source", "refresh", "acme/vault-hq", "--fetch-only") == 0
+    assert "team_drive = 0AACMEHQ1234567890\n" in fetched["conf"]  # found by its name
     assert not os.path.exists(fetched["path"])  # the login's file is gone after the fetch
     assert "SECRET" not in "".join(capsys.readouterr())
 

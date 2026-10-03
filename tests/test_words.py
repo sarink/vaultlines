@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -44,7 +45,20 @@ def test_one_word_for_each_thing(path):
         assert old not in text, f"say {word!r}"
 
 
-@pytest.mark.parametrize("path", sorted(ROOT.glob("src/vaultlines/**/*.py")), ids=lambda p: str(p.relative_to(ROOT)))
-def test_no_real_company_in_vl_itself(path):
-    """Help, messages and examples use acme, never a real company."""
-    assert "mixim" not in path.read_text().lower()
+# Real names that must never appear: a real company, its people, repos and drive. Written in
+# pieces, so this file doesn't name them either.
+REAL = ["mix" + "im", "jor" + "ge", "shee" + "ty", "0AHF" + "8p0HI9"]
+TRACKED = sorted(ROOT / f for f in subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True,
+                                                  text=True).stdout.split())
+
+
+def test_no_real_company_anywhere():
+    """Code, help, tests, docs and comments use acme, never a real company."""
+    found = []
+    for path in TRACKED:
+        try:
+            text = path.read_text().lower()
+        except (UnicodeDecodeError, OSError):
+            continue  # binary fixtures
+        found += [f"{path.relative_to(ROOT)}: {word}" for word in REAL if word.lower() in text]
+    assert found == []

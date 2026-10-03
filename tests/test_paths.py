@@ -23,7 +23,7 @@ def test_every_path_comes_from_the_home(monkeypatch, tmp_path):
     assert util.cache_dir() == root / "cache"
     assert util.vaults_dir() == root / "vaults"
     assert util.google_dir() == root / "google"
-    assert util.fetch_dir("mixim-ai/vault-hq") == root / "cache" / "fetch" / "mixim-ai" / "vault-hq"
+    assert util.fetch_dir("acme/vault-hq") == root / "cache" / "fetch" / "acme" / "vault-hq"
     assert runtime.path() == hook.runtime_path() == root / "state" / "runtime.json"
     assert audience.state_path() == root / "state" / "state.json"
 

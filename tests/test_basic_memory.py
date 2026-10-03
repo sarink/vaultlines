@@ -153,7 +153,7 @@ def test_validate(settings, problem):
 # ---------------------------------------------------------------- the block in a repo, at session start
 
 RUNTIME = {"default": {"writes": "kabir-personal", "reads": []}}
-BM_DATA = {"plugin": True, "projects": {"mixim-ai-public": "mixim-ai-public", "kabir-personal": "kabir-personal"}}
+BM_DATA = {"plugin": True, "projects": {"acme-public": "acme-public", "kabir-personal": "kabir-personal"}}
 
 
 def _block(path):
@@ -171,9 +171,9 @@ def _repo(tmp_path, name="marketing"):
 def test_session_start_points_the_plugin_at_the_repos_vault(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     repo = _repo(tmp_path)
-    rules = {"writes": "mixim-ai-public", "reads": [], "how": "notes_from", "root": str(repo), "folder": None}
+    rules = {"writes": "acme-public", "reads": [], "how": "notes_from", "root": str(repo), "folder": None}
     bm.session_start(rules, RUNTIME, BM_DATA)
-    assert _block(repo) == bm.plugin_block("mixim-ai-public")
+    assert _block(repo) == bm.plugin_block("acme-public")
     excluded = (repo / ".git" / "info" / "exclude").read_text()
     assert ".claude/settings.local.json" in excluded
     before = (repo / ".claude" / "settings.local.json").stat().st_mtime_ns
@@ -186,15 +186,15 @@ def test_session_start_keeps_other_settings(tmp_path, monkeypatch):
     repo = _repo(tmp_path)
     (repo / ".claude").mkdir()
     (repo / ".claude" / "settings.local.json").write_text(json.dumps({"model": "opus"}))
-    bm.session_start({"writes": "mixim-ai-public", "how": "notes_from", "root": str(repo)}, RUNTIME, BM_DATA)
+    bm.session_start({"writes": "acme-public", "how": "notes_from", "root": str(repo)}, RUNTIME, BM_DATA)
     data = json.loads((repo / ".claude" / "settings.local.json").read_text())
-    assert data["model"] == "opus" and data["basicMemory"]["primaryProject"] == "mixim-ai-public"
+    assert data["model"] == "opus" and data["basicMemory"]["primaryProject"] == "acme-public"
 
 
 def test_session_start_removes_vls_block_where_the_default_applies(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     repo = _repo(tmp_path)
-    bm.session_start({"writes": "mixim-ai-public", "how": "notes_from", "root": str(repo)}, RUNTIME, BM_DATA)
+    bm.session_start({"writes": "acme-public", "how": "notes_from", "root": str(repo)}, RUNTIME, BM_DATA)
     bm.session_start({"writes": "kabir-personal", "how": "personal", "root": str(repo)}, RUNTIME, BM_DATA)
     assert _block(repo) is None
     # A block someone wrote by hand stays.
@@ -205,8 +205,8 @@ def test_session_start_removes_vls_block_where_the_default_applies(tmp_path, mon
 
 def test_session_start_leaves_places_without_a_repo_or_folder_alone(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    bm.session_start({"writes": "mixim-ai-public", "how": "default", "root": None, "folder": None}, RUNTIME, BM_DATA)
-    bm.session_start({"writes": "mixim-ai-public", "how": "notes_from", "root": str(tmp_path / "x")},
+    bm.session_start({"writes": "acme-public", "how": "default", "root": None, "folder": None}, RUNTIME, BM_DATA)
+    bm.session_start({"writes": "acme-public", "how": "notes_from", "root": str(tmp_path / "x")},
                      RUNTIME, {**BM_DATA, "plugin": False})
     assert not (tmp_path / "x").exists()
 
@@ -215,15 +215,15 @@ def test_session_start_uses_a_folder_entry(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     folder = tmp_path / "writing"
     folder.mkdir()
-    bm.session_start({"writes": "mixim-ai-public", "how": "folder", "root": None, "folder": str(folder)},
+    bm.session_start({"writes": "acme-public", "how": "folder", "root": None, "folder": str(folder)},
                      RUNTIME, BM_DATA)
-    assert _block(folder)["primaryProject"] == "mixim-ai-public"
+    assert _block(folder)["primaryProject"] == "acme-public"
 
 
 def test_session_start_skips_a_vault_basic_memory_doesnt_know_yet(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     repo = _repo(tmp_path)
-    bm.session_start({"writes": "mixim-ai-new", "how": "notes_from", "root": str(repo)}, RUNTIME, BM_DATA)
+    bm.session_start({"writes": "acme-new", "how": "notes_from", "root": str(repo)}, RUNTIME, BM_DATA)
     assert not (repo / ".claude").exists()
 
 
