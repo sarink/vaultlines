@@ -147,7 +147,7 @@ def test_vault_create_makes_a_vault_on_this_computer(acme, computer):
 def test_vault_publish_makes_a_private_repo(acme, computer, capsys):
     vl("join", "acme")
     assert vl("vault", "create", "acme/vault-design", "--about", "Design notes.") == 0
-    assert "To publish it: `vl vault publish acme/vault-design`" in capsys.readouterr().out
+    assert "It's local until you publish it: `vl vault publish acme/vault-design`" in capsys.readouterr().out
     assert vl("vault", "publish", "acme/vault-design") == 0
     path = vaults_dir() / "acme" / "vault-design"
     assert origin(path) == acme.url("acme/vault-design")

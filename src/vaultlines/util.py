@@ -59,7 +59,8 @@ def vaults_dir() -> Path:
 
 
 def google_dir() -> Path:
-    """Read-only Google logins for fetching originals. Sessions can't touch it."""
+    """Your own read-only Google logins, for fetching originals and refreshing on this computer.
+    Sessions can't touch it."""
     return vl_home() / "google"
 
 

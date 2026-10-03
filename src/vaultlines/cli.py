@@ -150,8 +150,8 @@ def _join(owner: str, me: str) -> list[str]:
     if not vlt.path_of(personal).exists():
         _new_vault(personal, _personal_about(owner, me))
         new.append(personal)
-        say(f"Made your personal vault {personal}, local: on this computer only. "
-            f"To publish it: `vl vault publish {personal}`")
+        say(f"Made your personal vault {personal}. It's local until you publish it: "
+            f"`vl vault publish {personal}`")
     return new
 
 
@@ -325,7 +325,7 @@ def cmd_vault_create(args) -> None:
     if args.source:
         return _create_with_source(args, vault_id, notes_from)
     _new_vault(vault_id, args.about or "", notes_from)
-    say(f"Made {vault_id}, local: on this computer only. To publish it: `vl vault publish {vault_id}`")
+    say(f"Made {vault_id}. It's local until you publish it: `vl vault publish {vault_id}`")
     _apply(config.load())
 
 
@@ -717,7 +717,7 @@ def clean_fetched(max_age: float = 86400) -> int:
 
 def _sync_vault(v: vlt.Vault, stamp) -> str:
     if v.source is not None:
-        return gitsync.pull_keeping_changes(v.path)  # its refresh job writes it; this computer only reads
+        return gitsync.pull_keeping_changes(v.path)  # its refresh job writes it; here it's only read
     return gitsync.sync(v.path)
 
 

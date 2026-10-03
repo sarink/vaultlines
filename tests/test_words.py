@@ -79,6 +79,25 @@ def test_one_word_for_each_thing(path):
         assert old not in text, f"say {word!r}"
 
 
+# The old API. A vault is always its ID, OWNER/REPO: never a short name like acme-public.
+SHORT_NAME = re.compile(r"(?<![\w/.-])(?:acme|kabir|sam|alice|bob|local)-(?:public|private|hq|drive|design|founders|"
+                        r"everyone|recipes|side|personal|[a-z]+-personal)(?![\w-])")
+GONE = ["vl org ", "--publish", "vaultlines_", "google_client_", "this computer only"]
+
+
+@pytest.mark.parametrize("path", FILES, ids=lambda p: str(p.relative_to(ROOT)))
+def test_no_old_names(path):
+    text = path.read_text()
+    assert SHORT_NAME.findall(text) == [], "a vault is OWNER/REPO"
+    assert [word for word in GONE if word in text.lower()] == []
+
+
+@pytest.mark.parametrize("path", [p for p in FILES if p.name != "gdrive.py"], ids=lambda p: str(p.relative_to(ROOT)))
+def test_the_gdrive_setup_steps_are_only_in_its_guide(path):
+    """`vl vault create --source gdrive --help` shows them; nothing else repeats them."""
+    assert "console.cloud.google.com" not in path.read_text()
+
+
 # Real names that must never appear: a real company, its people, repos and drive. Written in
 # pieces, so this file doesn't name them either.
 REAL = ["mix" + "im", "jor" + "ge", "shee" + "ty", "0AHF" + "8p0HI9"]

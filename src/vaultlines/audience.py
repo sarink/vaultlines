@@ -3,7 +3,7 @@
 Who can see a vault comes from GitHub (see github.py):
   - no remote                -> only you
   - public repo              -> everyone
-  - private repo, you push   -> its collaborators (includes org base permission, teams, owners)
+  - private repo, you push   -> its collaborators (includes the organization's base permission, teams, owners)
   - anything else            -> unknown, which the label treats as "only you"
 
 Answers are cached in ~/.vaultlines/state/state.json, with the time they were checked.
