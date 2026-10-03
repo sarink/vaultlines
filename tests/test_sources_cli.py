@@ -264,7 +264,7 @@ def test_create_checks_github_can_take_a_workflow_first(fake_github, computer, g
 def test_joining_tells_you_how_to_log_in_for_originals(hq, capsys):
     assert vl("org", "join", "acme") == 0
     assert "vl source login acme/vault-hq" in capsys.readouterr().out
-    assert runtime.load()["vaults"]["acme-hq"]["source"] == "gdrive"
+    assert runtime.load()["vaults"]["acme/vault-hq"]["source"] == "gdrive"
 
 
 def test_fetch_logs_in_and_downloads_one_original(hq, capsys):
@@ -279,7 +279,7 @@ def test_fetch_logs_in_and_downloads_one_original(hq, capsys):
     assert time.time() - path.stat().st_mtime < 60  # so `vl sync` keeps it for a day
     assert "SECRET" not in out + err
     assert google.load_token(CLIENT) == REFRESH
-    assert vl("source", "fetch", "acme-hq", "Finance/Runway.xlsx") == 0  # by short name, again
+    assert vl("source", "fetch", "acme-hq", "Finance/Runway.xlsx") == 1  # a vault is OWNER/REPO
 
 
 def test_fetch_exports_google_files(hq, capsys):
@@ -291,7 +291,7 @@ def test_fetch_exports_google_files(hq, capsys):
 
 
 @pytest.mark.parametrize("path, message", [
-    ("Legal/Secret.pdf", ("You can read acme-hq, but your Google account can't open this file in Drive. "
+    ("Legal/Secret.pdf", ("You can read acme/vault-hq, but your Google account can't open this file in Drive. "
                           f"Ask for access to it: https://drive.google.com/drive/folders/{HQ}")),
     ("Nope.pdf", "No note in acme/vault-hq has the path 'Nope.pdf'"),
     ("../etc/passwd", "isn't a path inside the drive"),

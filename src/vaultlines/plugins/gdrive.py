@@ -706,8 +706,8 @@ def convert(root: Path, source: dict, vault_id: str, staged: Path) -> str:
 
 # ---------------------------------------------------------------- the hook's side
 
-def source_briefing(short: str, vault_id: str) -> str:
-    return (f"`{short}` holds notes converted from Google Drive; for an original, run "
+def source_briefing(vault_id: str) -> str:
+    return (f"`{vault_id}` holds notes converted from Google Drive; for an original, run "
             f"`vl source fetch {vault_id} \"<path from the note's frontmatter>\"`.")
 
 
@@ -833,7 +833,7 @@ def check_fetch_path(path) -> None:
         raise VlError(f"{path!r} isn't a path inside the drive. Use the `path` from the note's frontmatter.")
 
 
-def fetch(v, source: dict, short: str, path: str) -> Path:
+def fetch(v, source: dict, path: str) -> Path:
     """Download one original into the vault's fetch folder, read-only. Returns where it is."""
     from .. import google
     from ..util import VlError, fetch_dir
@@ -853,7 +853,7 @@ def fetch(v, source: dict, short: str, path: str) -> Path:
         meta = google.file_meta(access, note.meta["id"])
         out = google.download(access, note.meta["id"], meta.get("mimeType") or "", dest)
     except google.NoAccess:
-        raise VlError(f"You can read {short}, but your Google account can't open this file in Drive. "
+        raise VlError(f"You can read {v.id}, but your Google account can't open this file in Drive. "
                       f"Ask for access to it: https://drive.google.com/drive/folders/{folder_id_of(source['folder_id'])}") from None
     os.utime(out)  # `vl sync` cleans by the time it was fetched
     out.chmod(0o444)

@@ -46,7 +46,7 @@ SEARCH_TOOLS = ("Grep", "Glob")
 MATCHER = "^(" + "|".join(["Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "Grep", "Glob", "Bash",
                             *(f"{p}.*" for p in plugins.TOOL_PREFIXES)]) + ")$"
 ERROR = "vl hook error: run `vl doctor`."
-RUNTIME_VERSION = 4  # runtime.json's layout
+RUNTIME_VERSION = 5  # runtime.json's layout
 FETCH_RE = re.compile(r"(?:^|[\s;&|(`])(?:\S*/)?vl\s+source\s+fetch\s+['\"]?([A-Za-z0-9][A-Za-z0-9._/-]*)")
 FETCHED = "fetched originals are read-only copies. Run `vl source fetch` again for a fresh one."
 REPO_HOWS = ("repos", "notes_from", "personal", "conflict")  # rules that came from the repo
@@ -66,7 +66,7 @@ def _abs(path: str, cwd: str) -> str:
 
 
 def _vault_paths(runtime: dict) -> dict[str, str]:
-    """Vault folder -> vault name."""
+    """Vault folder -> vault ID."""
     return {p: name for name, v in runtime["vaults"].items() for p in v["paths"]}
 
 
@@ -81,12 +81,10 @@ def vault_of(path: str, runtime: dict, folders: dict[str, str] | None = None) ->
     return folders[key] if key else None
 
 
-def _by_ref(runtime: dict, ref: str) -> str | None:
-    """A vault's short name, from its ID (OWNER/REPO) or short name."""
-    ref = ref.lower()
-    if ref in runtime["vaults"]:
-        return ref
-    return next((name for name, v in runtime["vaults"].items() if v.get("id") == ref), None)
+def _known(runtime: dict, vault_id: str) -> str | None:
+    """The vault, if runtime.json knows it."""
+    vault_id = vault_id.lower()
+    return vault_id if vault_id in runtime["vaults"] else None
 
 
 def _has_source(runtime: dict, vault: str) -> bool:
@@ -211,7 +209,7 @@ def touched(event: dict, runtime: dict, rules: dict | None) -> Call:
                     call.add(v, "write")
                     call.bash = True
             # Originals from `vl source fetch`, and `vl source fetch` itself, only read.
-            fetched = [_by_ref(runtime, ref.strip("'\"")) for ref in FETCH_RE.findall(command)]
+            fetched = [_known(runtime, ref.strip("'\"")) for ref in FETCH_RE.findall(command)]
             for v in bash_vaults(command, cwd, runtime, _fetch_paths(runtime)) + [v for v in fetched if v]:
                 call.add(v, "read")
     elif found := plugins.plugin_for_tool(runtime, tool):
@@ -290,7 +288,7 @@ def briefing_text(rules: dict, runtime: dict) -> str | None:
     for v in [w, *reads]:
         source = plugins.SOURCES.get(vaults.get(v, {}).get("source"))
         if source and hasattr(source, "source_briefing"):
-            lines.append(source.source_briefing(v, vaults[v].get("id", v)))
+            lines.append(source.source_briefing(v))
     return " ".join(lines)
 
 

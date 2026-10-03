@@ -11,7 +11,7 @@ There are two kinds, each a module where every function is optional unless noted
 
 The hook side is pure, fast and uses only the standard library, because `vl hook`
 imports it. `data` is what the plugin put in runtime.json; `rules` is the session's
-{"writes": short name, "reads": [...]}:
+{"writes": vault ID, "reads": [...]}:
 
   TOOL_PREFIXES                           tool names the plugin answers for
   on_call(tool, args, rules, data)        -> Access: which vaults a call touches
@@ -20,7 +20,7 @@ imports it. `data` is what the plugin put in runtime.json; `rules` is the sessio
                                              of the SessionStart message
   session_start(rules, runtime, data)     set things up for a new session (Basic Memory:
                                           its settings block in the repo)
-  source_briefing(short, vault_id)        (sources) a sentence for the SessionStart message
+  source_briefing(vault_id)               (sources) a sentence for the SessionStart message
 
 The vl side imports what it needs inside each function. For a plugin, `settings` is its
 settings, with `kind`:
@@ -62,7 +62,7 @@ A source kind. `source` is the vault's [source] table, already checked:
                                              from what's in `staged`. No login (required)
   default_about(name), comments(source, name)
                                           for the vault.toml vl writes
-  fetch(vault, source, short, path)       -> the local copy of one original
+  fetch(vault, source, path)              -> the local copy of one original
   login(source), saved_login(source)     your own login on this computer (saved_login -> its
                                           token, or None), for fetching, and for refreshing
                                           when VL_SOURCE_TOKEN isn't set

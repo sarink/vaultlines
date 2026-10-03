@@ -1,7 +1,7 @@
 """runtime.json: everything the hook needs, so it never parses TOML or asks GitHub.
 
 Written by `vl apply` and the daily check, to ~/.vaultlines/state/runtime.json. Vaults
-are keyed by their short names, which are also their Basic Memory project names.
+are named by their IDs, OWNER/REPO, which are also their Basic Memory project names.
 """
 
 from __future__ import annotations
@@ -31,7 +31,6 @@ def _audience(a: Audience | None) -> dict:
 
 def owners(cfg: Config, lost: set[str], warnings: list[str]) -> dict[str, dict]:
     """Each joined owner: your personal vault, its vaults, and which vault each repo's notes go to."""
-    shorts = cfg.shorts
     out = {}
     for owner in cfg.owners:
         mine = sorted(vid for vid in cfg.vaults if vid.split("/")[0] == owner and vid not in lost)
@@ -47,11 +46,11 @@ def owners(cfg: Config, lost: set[str], warnings: list[str]) -> dict[str, dict]:
                     warnings.append(f"{vid}: notes_from lists {repo}, which belongs to another owner, so it's ignored "
                                     "(owners are kept apart)")
                     continue
-                claims.setdefault(repo, []).append(shorts[vid])
+                claims.setdefault(repo, []).append(vid)
         personal = cfg.personal(owner)
         out[owner] = {
-            "personal": shorts[personal] if personal else None,
-            "vaults": [shorts[vid] for vid in mine],
+            "personal": personal,
+            "vaults": mine,
             "notes_from": {repo: c[0] for repo, c in sorted(claims.items()) if len(c) == 1},
             "conflicts": {repo: sorted(c) for repo, c in sorted(claims.items()) if len(c) > 1},
         }
@@ -59,8 +58,6 @@ def owners(cfg: Config, lost: set[str], warnings: list[str]) -> dict[str, dict]:
 
 
 def _rule(cfg: Config, rule, where: str, lost: set[str], warnings: list[str]) -> dict:
-    shorts = cfg.shorts
-
     def ref(vid: str | None, key: str) -> str | None:
         if vid is None:
             return None
@@ -70,7 +67,7 @@ def _rule(cfg: Config, rule, where: str, lost: set[str], warnings: list[str]) ->
         if vid in lost:
             warnings.append(f"config.toml: {where}.{key}: you can't access {vid} on GitHub any more, so it's left out")
             return None
-        return shorts[vid]
+        return vid
 
     writes = ref(rule.writes, "writes")
     if writes and cfg.vaults[rule.writes].source is not None:
@@ -89,16 +86,15 @@ def build(cfg: Config, auds: dict[str, Audience], plugin_data: dict[str, dict],
     """`plugin_data` is each plugin's `data()`, by plugin name. `lost`: vaults you can't access
     on GitHub any more. Problems are added to `warnings`."""
     warnings = [] if warnings is None else warnings
-    shorts = cfg.shorts
     vaults = {}
     for vid, v in sorted(cfg.vaults.items()):
-        entry = {"id": vid, "paths": [str(expand(v.path))], "show": contract(v.path), "about": v.about,
+        entry = {"paths": [str(expand(v.path))], "show": contract(v.path), "about": v.about,
                  "audience": _audience(auds.get(vid))}
         if v.source is not None:
             entry.update(source=v.source.get("kind") or "unknown", fetch=[str(expand(fetch_dir(vid)))])
         if vid in lost:
             entry["lost"] = True
-        vaults[shorts[vid]] = entry
+        vaults[vid] = entry
     mine = cfg.personal(cfg.me) if cfg.me else None
     return {
         "version": VERSION,
@@ -111,7 +107,7 @@ def build(cfg: Config, auds: dict[str, Audience], plugin_data: dict[str, dict],
         "repos": {key: _rule(cfg, r, f'repos."{key}"', lost, warnings) for key, r in sorted(cfg.repos.items())},
         "folders": {key: _rule(cfg, r, f'folders."{contract(key)}"', lost, warnings)
                     for key, r in sorted(cfg.folders.items())},
-        "default": {"writes": shorts[mine] if mine else None, "reads": []},
+        "default": {"writes": mine, "reads": []},
         "plugins": {name: {"kind": name,
                            "tool_prefixes": list(getattr(plugins.KINDS[name], "TOOL_PREFIXES", ())),
                            "data": d}

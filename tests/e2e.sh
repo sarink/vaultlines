@@ -123,10 +123,10 @@ check "acme's vaults are cloned" test -d "$V/acme/vault-public/.git" -a -d "$V/a
 check "  ...but not a repo without vault.toml" test ! -e "$V/acme/vault-notes"
 check "hooks installed" jq -e '[.hooks.SessionStart, .hooks.UserPromptSubmit, .hooks.PreToolUse] | map(.[0].hooks[0].command | endswith("vl hook")) | all' "$ROOT/alice/.claude/settings.json"
 check "one basic-memory server, at user level" test "$(jq -r '.mcpServers | keys | join(",")' "$ROOT/alice/.claude/.claude.json")" = "basic-memory"
-check "Basic Memory knows each vault by its short name" jq -e '.plugins["basic-memory"].data.projects | has("acme-public") and has("alice-personal") and has("acme-hq")' <(runtime alice)
-check "the plugin writes to your personal vault by default" jq -e '.basicMemory.primaryProject == "alice-personal"' "$ROOT/alice/.claude/settings.json"
-check "runtime.json knows notes_from" jq -e '.owners["acme"].notes_from["acme/marketing"] == "acme-public"' <(runtime alice)
-check "  ...and the conflict" jq -e '.owners["acme"].conflicts["acme/both"] == ["acme-private", "acme-public"]' <(runtime alice)
+check "Basic Memory knows each vault by its ID" jq -e '.plugins["basic-memory"].data.projects | has("acme/vault-public") and has("alice/vault-alice-personal") and has("acme/vault-hq")' <(runtime alice)
+check "the plugin writes to your personal vault by default" jq -e '.basicMemory.primaryProject == "alice/vault-alice-personal"' "$ROOT/alice/.claude/settings.json"
+check "runtime.json knows notes_from" jq -e '.owners["acme"].notes_from["acme/marketing"] == "acme/vault-public"' <(runtime alice)
+check "  ...and the conflict" jq -e '.owners["acme"].conflicts["acme/both"] == ["acme/vault-private", "acme/vault-public"]' <(runtime alice)
 check "status shows the conflict" grep -q "CONFLICT: acme/both" <<<"$(vl alice status)"
 
 echo "== bob joins: GitHub decides what he gets"
@@ -146,27 +146,27 @@ B_BILLING="$(clone bob acme/billing billing)"
 A_BOTH="$(clone alice acme/both code/both)"
 A_BLOG="$(clone alice alice/blog code/blog)"
 mkdir -p "$ROOT/alice/Desktop" "$ROOT/alice/code/marketing/src"
-check "alice in marketing writes to vault-public" test "$(writes_of alice "$A_MKT" m1)" = acme-public
-check "  ...from a subfolder too" test "$(writes_of alice "$A_MKT/src" m2)" = acme-public
-check "bob's clone elsewhere writes there too" test "$(writes_of bob "$B_MKT" b1)" = acme-public
-check "legal-case writes to vault-private" test "$(writes_of alice "$A_LEGAL" j1)" = acme-private
-check "billing (in no notes_from): alice's acme personal vault" test "$(writes_of alice "$A_BILLING" s1)" = acme-alice-personal
-check "  ...and bob's for bob" test "$(writes_of bob "$B_BILLING" s2)" = acme-bob-personal
-check "a repo in two notes_from: the personal vault" test "$(writes_of alice "$A_BOTH" c1)" = acme-alice-personal
+check "alice in marketing writes to vault-public" test "$(writes_of alice "$A_MKT" m1)" = acme/vault-public
+check "  ...from a subfolder too" test "$(writes_of alice "$A_MKT/src" m2)" = acme/vault-public
+check "bob's clone elsewhere writes there too" test "$(writes_of bob "$B_MKT" b1)" = acme/vault-public
+check "legal-case writes to vault-private" test "$(writes_of alice "$A_LEGAL" j1)" = acme/vault-private
+check "billing (in no notes_from): alice's acme personal vault" test "$(writes_of alice "$A_BILLING" s1)" = acme/vault-alice-personal
+check "  ...and bob's for bob" test "$(writes_of bob "$B_BILLING" s2)" = acme/vault-bob-personal
+check "a repo in two notes_from: the personal vault" test "$(writes_of alice "$A_BOTH" c1)" = acme/vault-alice-personal
 check "  ...and the briefing says why" grep -q "is in notes_from of two vaults" <<<"$(start alice "$A_BOTH" c2)"
-check "alice's own repo: her personal vault" test "$(writes_of alice "$A_BLOG" bl)" = alice-personal
-check "no repo: her personal vault" test "$(writes_of alice "$ROOT/alice/Desktop" d1)" = alice-personal
+check "alice's own repo: her personal vault" test "$(writes_of alice "$A_BLOG" bl)" = alice/vault-alice-personal
+check "no repo: her personal vault" test "$(writes_of alice "$ROOT/alice/Desktop" d1)" = alice/vault-alice-personal
 check "marketing reads the other acme vaults" \
-  test "$(session alice m1 | jq -c '.rules.reads')" = '["acme-alice-personal","acme-hq","acme-private"]'
+  test "$(session alice m1 | jq -c '.rules.reads')" = '["acme/vault-alice-personal","acme/vault-hq","acme/vault-private"]'
 check "the briefing names the vault and what it's about" \
-  grep -q 'save notes from this repo to `acme-public` (Basic Memory project="acme-public"): Notes everyone at Acme can see.' <<<"$(start alice "$A_MKT" m3)"
-check "the Basic Memory block is in the repo" jq -e '.basicMemory.primaryProject == "acme-public"' "$A_MKT/.claude/settings.local.json"
+  grep -q 'save notes from this repo to `acme/vault-public` (Basic Memory project="acme/vault-public"): Notes everyone at Acme can see.' <<<"$(start alice "$A_MKT" m3)"
+check "the Basic Memory block is in the repo" jq -e '.basicMemory.primaryProject == "acme/vault-public"' "$A_MKT/.claude/settings.local.json"
 check "  ...kept out of git" test -z "$(git -C "$A_MKT" status --porcelain)"
 
 echo "== the hook guards what each session reads and writes"
 check "the first session in a new clone asks before a shared write" \
   test "$(hook alice "$A_MKT" "$(write_event "$V/acme/vault-public/n.md" m1)")" = ask
-check "  ...because Basic Memory may have briefed it from alice's personal vault" jq -e '.read | index("alice-personal")' <(session alice m1)
+check "  ...because Basic Memory may have briefed it from alice's personal vault" jq -e '.read | index("alice/vault-alice-personal")' <(session alice m1)
 check "later sessions: writing vault-public is allowed" test "$(hook alice "$A_MKT" "$(write_event "$V/acme/vault-public/n.md" m3)")" = allow
 hook alice "$A_MKT" "$(read_event "$V/acme/vault-private/plan.md" m3)" >/dev/null
 check "  ...but after reading vault-private, it asks (bob can't see that)" \
@@ -180,12 +180,12 @@ hook alice "$A_MKT" '{"hook_event_name": "UserPromptSubmit", "session_id": "m2",
 check "Claude running vl org leave on its own asks" test "$(hook alice "$A_MKT" "$(bash_event "vl org leave acme" m2)")" = ask
 hook alice "$A_MKT" '{"hook_event_name": "UserPromptSubmit", "session_id": "m2", "prompt": "use vl to leave"}' >/dev/null
 check "  ...but not when you asked for vl" test "$(hook alice "$A_MKT" "$(bash_event "vl org leave acme" m2)")" = allow
-check "vl sessions shows the session's vault" grep -q "acme-public" <<<"$(vl alice sessions)"
-check "vl status previews where writes ask" grep -q "writes to acme-public ask after reading acme-private (bob can't see" <<<"$(vl alice sync --check-github >/dev/null; vl alice status)"
+check "vl sessions shows the session's vault" grep -q "acme/vault-public" <<<"$(vl alice sessions)"
+check "vl status previews where writes ask" grep -q "writes to acme/vault-public ask after reading acme/vault-private (bob can't see" <<<"$(vl alice sync --check-github >/dev/null; vl alice status)"
 
 echo "== notes flow both ways"
-bmtool bob write-note --title "From bob" --folder notes --content "- [fact] hello from bob" --project acme-public
-bmtool bob write-note --title "Bob checkpoint" --folder sessions --content "- [x] private" --project acme-public
+bmtool bob write-note --title "From bob" --folder notes --content "- [fact] hello from bob" --project acme/vault-public
+bmtool bob write-note --title "Bob checkpoint" --folder sessions --content "- [x] private" --project acme/vault-public
 vl bob sync >/dev/null
 vl alice sync >/dev/null
 check "alice got bob's note" test -f "$V/acme/vault-public/notes/From bob.md"
@@ -201,9 +201,9 @@ printf 'about      = "Notes everyone at Acme can see."\nnotes_from = ["acme/mark
   > "$ROOT/admin/acme/vault-public/vault.toml"
 publish acme/vault-public "billing too"
 vl alice sync >/dev/null
-check "billing's notes go to vault-public now" test "$(writes_of alice "$A_BILLING" s3)" = acme-public
+check "billing's notes go to vault-public now" test "$(writes_of alice "$A_BILLING" s3)" = acme/vault-public
 check "  ...and the conflict is gone" jq -e '.owners["acme"].conflicts == {}' <(runtime alice)
-check "  ...and billing's Basic Memory block followed" jq -e '.basicMemory.primaryProject == "acme-public"' "$A_BILLING/.claude/settings.local.json"
+check "  ...and billing's Basic Memory block followed" jq -e '.basicMemory.primaryProject == "acme/vault-public"' "$A_BILLING/.claude/settings.local.json"
 
 echo "== your changes in config.toml"
 CONFIG="$ROOT/alice/.vaultlines/config.toml"
@@ -211,7 +211,7 @@ vl alice vault create alice/vault-recipes --about "Food." >/dev/null
 check "a new vault stays on this computer" test -z "$(git -C "$V/alice/vault-recipes" remote)"
 vl alice vault create acme/vault-founders --about "Founders." --notes_from acme/studio >/dev/null
 A_STUDIO="$(clone alice acme/studio code/studio)"
-check "  ...an org vault too, with its notes_from" test "$(writes_of alice "$A_STUDIO" st)" = acme-founders
+check "  ...an org vault too, with its notes_from" test "$(writes_of alice "$A_STUDIO" st)" = acme/vault-founders
 check "  ...and nobody else gets it" jq -e '.repos | has("acme/vault-founders") | not' "$GH"
 mkdir -p "$ROOT/alice/writing"
 cat >> "$CONFIG" <<'EOF'
@@ -227,11 +227,11 @@ reads = ["alice/vault-alice-personal"]
 writes = "alice/vault-recipes"
 EOF
 vl alice apply >/dev/null
-check "a [repos] entry wins over notes_from" test "$(writes_of alice "$A_LEGAL" j2)" = acme-public
-check "  ...and adds its reads" jq -e '.rules.reads | index("alice-recipes")' <(session alice j2)
+check "a [repos] entry wins over notes_from" test "$(writes_of alice "$A_LEGAL" j2)" = acme/vault-public
+check "  ...and adds its reads" jq -e '.rules.reads | index("alice/vault-recipes")' <(session alice j2)
 check "an owner-wide entry lets every acme repo read alice's own vault" \
   test "$(hook alice "$A_MKT" "$(read_event "$V/alice/vault-alice-personal/a.md" m4)")" = allow
-check "a [folders] entry counts outside joined repos" test "$(writes_of alice "$ROOT/alice/writing" w1)" = alice-recipes
+check "a [folders] entry counts outside joined repos" test "$(writes_of alice "$ROOT/alice/writing" w1)" = alice/vault-recipes
 
 echo "== auto_pull keeps a repo up to date, wherever it's cloned"
 A_WS="$(clone alice acme/acme-workspace work/ws)"
@@ -280,7 +280,7 @@ check "  ...keeping the login for vl only" test "$(stat -f %Lp "$ROOT/bob/.vault
 check "  ...and says so when Drive won't share a file" grep -q "can.t open this file in Drive. Ask for access to" <<<"$(vl bob source fetch acme/vault-hq "Real/Secret.pdf" 2>&1 || true)"
 start bob "$B_MKT" f1 >/dev/null
 check "the hook lets a session fetch from a vault it reads" test "$(hook bob "$B_MKT" "$(bash_event 'vl source fetch acme/vault-hq "Real/Runway.xlsx"' f1)")" = allow
-check "  ...counting it as a read" jq -e '.read | index("acme-hq")' <(session bob f1)
+check "  ...counting it as a read" jq -e '.read | index("acme/vault-hq")' <(session bob f1)
 check "  ...so a write to vault-public asks (bob can't list who reads vault-hq)" \
   test "$(hook bob "$B_MKT" "$(write_event "$VB/acme/vault-public/x.md" f1)")" = ask
 check "reading a fetched original is a read" test "$(hook bob "$B_MKT" "$(read_event "$FETCHED" f1)")" = allow
@@ -296,10 +296,10 @@ echo "== GitHub changes are caught by the daily check"
 jq '.repos["acme/vault-public"].push += ["dan"] | .repos["acme/vault-private"].push = ["carol"]' "$GH" > "$GH.tmp" && mv "$GH.tmp" "$GH"
 STATE="$ROOT/alice/.vaultlines/state/state.json"
 vl alice sync --background >/dev/null 2>&1
-check "no re-check within check_interval" jq -e '.vaults["acme-public"].audience.logins | index("dan") | not' <(runtime alice)
+check "no re-check within check_interval" jq -e '.vaults["acme/vault-public"].audience.logins | index("dan") | not' <(runtime alice)
 jq '.checked_at = 0' "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"   # a day passes
 OUT="$(vl alice sync --background 2>&1)"
-check "the daily check updates who can see each vault" jq -e '.vaults["acme-public"].audience.logins | index("dan")' <(runtime alice)
+check "the daily check updates who can see each vault" jq -e '.vaults["acme/vault-public"].audience.logins | index("dan")' <(runtime alice)
 check "  ...and stops syncing a vault alice lost" grep -q "acme/vault-private: no access on GitHub any more" <<<"$OUT"
 check "  ...keeping its files" test -f "$V/acme/vault-private/vault.toml"
 check "  ...and status says so" grep -q "no access on GitHub any more" <<<"$(vl alice status)"

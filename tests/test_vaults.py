@@ -1,32 +1,11 @@
-"""Vaults: vault.toml, short names, and what's on disk."""
+"""Vaults: vault.toml, and what's on disk."""
 
 import subprocess
 
 import pytest
 
 from vaultlines import vaults
-from vaultlines.vaults import parse_vault_toml, short_name, short_names
-
-
-@pytest.mark.parametrize("vault_id, short", [
-    ("acme/vault-public", "acme-public"),
-    ("kabir/vault-kabir-personal", "kabir-personal"),
-    ("acme/vault-kabir-personal", "acme-kabir-personal"),
-    ("acme/vault-acme-hq", "acme-hq"),
-    ("acme/vault-acme", "acme"),
-    ("acme/recipes", "acme-recipes"),
-    ("acme/vault-acmecorp", "acme-acmecorp"),  # only a whole word counts as the owner
-])
-def test_short_name(vault_id, short):
-    assert short_name(vault_id) == short
-
-
-def test_short_names_never_collide():
-    found = short_names(["a-b/vault-c", "a/vault-b-c", "x/vault-y"])
-    assert found["a-b/vault-c"] == "a-b-c"
-    assert found["a/vault-b-c"] == "a-vault-b-c"
-    assert found["x/vault-y"] == "x-y"
-    assert len(set(found.values())) == 3
+from vaultlines.vaults import parse_vault_toml
 
 
 @pytest.mark.parametrize("vault_id, ok", [
@@ -133,3 +112,16 @@ def test_remote_id(url, found):
 def test_file_remotes_count_in_tests(monkeypatch):
     monkeypatch.setenv("VAULTLINES_TEST_REMOTES", "1")
     assert vaults.remote_id("file:///tmp/remotes/acme/vault-public.git") == "acme/vault-public"
+
+
+def test_a_vault_is_named_only_by_its_id(tmp_path, monkeypatch):
+    from vaultlines.config import Config
+    from vaultlines.util import VlError
+
+    v = vaults.Vault("acme/vault-public", tmp_path)
+    cfg = Config(vaults={"acme/vault-public": v, "kabir/vault-recipes": vaults.Vault("kabir/vault-recipes", tmp_path)})
+    assert cfg.vault("ACME/vault-public ") is v
+    with pytest.raises(VlError) as e:
+        cfg.vault("acme-public")
+    assert str(e.value) == ("No vault 'acme-public' on this computer. A vault is OWNER/REPO, like one of these: "
+                            "acme/vault-public, kabir/vault-recipes")

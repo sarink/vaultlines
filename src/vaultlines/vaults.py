@@ -11,8 +11,7 @@ has vault.toml at its root:
     [source]                                                  # where the notes come from; read-only
     kind = "gdrive"
 
-Basic Memory and Claude know each vault by a short name: the owner, then the repo
-name without `vault-` (see `short_name()`).
+The ID is the vault's only name: in commands, in Claude's sessions, and in Basic Memory.
 """
 
 from __future__ import annotations
@@ -42,33 +41,6 @@ def valid_id(vault_id: str) -> bool:
 
 def personal_id(owner: str, me: str) -> str:
     return f"{owner}/{PREFIX}{me}-personal"
-
-
-def short_name(vault_id: str) -> str:
-    """acme/vault-public -> acme-public. kabir/vault-kabir-personal -> kabir-personal."""
-    owner, repo = vault_id.split("/", 1)
-    rest = repo.removeprefix(PREFIX)
-    if rest == owner or rest.startswith(owner + "-"):
-        return rest
-    return f"{owner}-{rest}"
-
-
-def short_names(ids) -> dict[str, str]:
-    """A short name for each vault, never the same twice. When two would be the same,
-    the later one (by ID) keeps the whole repo name."""
-    out: dict[str, str] = {}
-    taken: set[str] = set()
-    for vault_id in sorted(ids):
-        name = short_name(vault_id)
-        if name in taken:
-            name = vault_id.replace("/", "-")
-            n = 2
-            while name in taken:
-                name = f"{vault_id.replace('/', '-')}-{n}"
-                n += 1
-        taken.add(name)
-        out[vault_id] = name
-    return out
 
 
 # ---------------------------------------------------------------- vault.toml
@@ -140,7 +112,7 @@ def render_vault_toml(about: str, notes_from=(), source: dict | None = None, sou
 class Vault:
     id: str  # OWNER/REPO
     path: Path
-    remote: str | None = None  # the git origin; None: this computer only
+    remote: str | None = None  # the git origin; None: local
     info: Info = field(default_factory=Info)
     problems: list[str] = field(default_factory=list)
 
@@ -166,7 +138,7 @@ class Vault:
 
     @property
     def local(self) -> bool:
-        """On this computer only: not published on GitHub."""
+        """Not published on GitHub: on this computer and nowhere else."""
         return self.remote is None
 
 

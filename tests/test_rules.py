@@ -94,15 +94,15 @@ def test_a_gitdir_file_that_points_elsewhere(tmp_path):
 def runtime(**extra):
     rt = {
         "owners": {
-            "acme": {"personal": "acme-kabir-personal",
-                         "vaults": ["acme-hq", "acme-kabir-personal", "acme-private", "acme-public"],
-                         "notes_from": {"acme/marketing": "acme-public",
-                                        "acme/legal-case": "acme-private"},
-                         "conflicts": {"acme/both": ["acme-private", "acme-public"]}},
-            "kabir": {"personal": "kabir-personal", "vaults": ["kabir-personal", "kabir-side"],
+            "acme": {"personal": "acme/vault-kabir-personal",
+                         "vaults": ["acme/vault-hq", "acme/vault-kabir-personal", "acme/vault-private", "acme/vault-public"],
+                         "notes_from": {"acme/marketing": "acme/vault-public",
+                                        "acme/legal-case": "acme/vault-private"},
+                         "conflicts": {"acme/both": ["acme/vault-private", "acme/vault-public"]}},
+            "kabir": {"personal": "kabir/vault-kabir-personal", "vaults": ["kabir/vault-kabir-personal", "kabir-side"],
                       "notes_from": {}, "conflicts": {}},
         },
-        "repos": {}, "folders": {}, "default": {"writes": "kabir-personal", "reads": []},
+        "repos": {}, "folders": {}, "default": {"writes": "kabir/vault-kabir-personal", "reads": []},
     }
     rt.update(extra)
     return rt
@@ -114,8 +114,8 @@ def at(tmp_path, url, name="clone"):
 
 def test_a_repo_in_notes_from_writes_there_and_reads_the_owners_other_vaults(tmp_path):
     r = resolve(at(tmp_path, "https://github.com/acme/marketing.git"), runtime())
-    assert r["writes"] == "acme-public"
-    assert r["reads"] == ["acme-hq", "acme-kabir-personal", "acme-private"]
+    assert r["writes"] == "acme/vault-public"
+    assert r["reads"] == ["acme/vault-hq", "acme/vault-kabir-personal", "acme/vault-private"]
     assert (r["how"], r["repo"]) == ("notes_from", "acme/marketing")
 
 
@@ -127,23 +127,23 @@ def test_the_same_repo_cloned_anywhere_gets_the_same_rules(tmp_path):
 
 def test_a_repo_in_no_notes_from_writes_to_your_personal_vault_for_the_owner(tmp_path):
     r = resolve(at(tmp_path, "https://github.com/acme/billing.git"), runtime())
-    assert (r["writes"], r["how"]) == ("acme-kabir-personal", "personal")
-    assert r["reads"] == ["acme-hq", "acme-private", "acme-public"]
+    assert (r["writes"], r["how"]) == ("acme/vault-kabir-personal", "personal")
+    assert r["reads"] == ["acme/vault-hq", "acme/vault-private", "acme/vault-public"]
 
 
 def test_your_own_account(tmp_path):
     r = resolve(at(tmp_path, "https://github.com/kabir/blog.git"), runtime())
-    assert (r["writes"], r["reads"]) == ("kabir-personal", ["kabir-side"])
+    assert (r["writes"], r["reads"]) == ("kabir/vault-kabir-personal", ["kabir-side"])
 
 
 def test_no_repo_writes_to_your_personal_vault_and_reads_nothing(tmp_path):
     r = resolve(str(tmp_path), runtime())
-    assert (r["writes"], r["reads"], r["how"], r["repo"]) == ("kabir-personal", [], "default", None)
+    assert (r["writes"], r["reads"], r["how"], r["repo"]) == ("kabir/vault-kabir-personal", [], "default", None)
 
 
 def test_a_repo_of_an_owner_you_didnt_join_is_like_no_repo(tmp_path):
     r = resolve(at(tmp_path, "https://github.com/torvalds/linux.git"), runtime())
-    assert (r["writes"], r["reads"], r["how"]) == ("kabir-personal", [], "default")
+    assert (r["writes"], r["reads"], r["how"]) == ("kabir/vault-kabir-personal", [], "default")
 
 
 def test_a_repo_without_a_github_remote(tmp_path):
@@ -153,64 +153,64 @@ def test_a_repo_without_a_github_remote(tmp_path):
 
 def test_owners_stay_apart(tmp_path):
     r = resolve(at(tmp_path, "https://github.com/acme/marketing.git"), runtime())
-    assert not {"kabir-personal", "kabir-side"} & {r["writes"], *r["reads"]}
+    assert not {"kabir/vault-kabir-personal", "kabir-side"} & {r["writes"], *r["reads"]}
 
 
 def test_a_fork_follows_origin_first(tmp_path):
     fork = clone_at(tmp_path / "fork", "git@github.com:kabir/marketing.git", "https://github.com/acme/marketing.git")
-    assert resolve(str(fork), runtime())["writes"] == "kabir-personal"
+    assert resolve(str(fork), runtime())["writes"] == "kabir/vault-kabir-personal"
     # origin's owner isn't joined: the next remote counts.
     other = clone_at(tmp_path / "other", "git@github.com:someone/marketing.git", "https://github.com/acme/marketing.git")
-    assert resolve(str(other), runtime())["writes"] == "acme-public"
+    assert resolve(str(other), runtime())["writes"] == "acme/vault-public"
 
 
 def test_two_vaults_claiming_a_repo_send_its_notes_to_your_personal_vault(tmp_path):
     r = resolve(at(tmp_path, "https://github.com/acme/both.git"), runtime())
-    assert (r["writes"], r["how"]) == ("acme-kabir-personal", "conflict")
-    assert r["conflict"] == ["acme-private", "acme-public"]
+    assert (r["writes"], r["how"]) == ("acme/vault-kabir-personal", "conflict")
+    assert r["conflict"] == ["acme/vault-private", "acme/vault-public"]
 
 
 def test_a_repos_entry_wins(tmp_path):
-    rt = runtime(repos={"acme/marketing": {"writes": "acme-private", "reads": ["local-recipes"]}})
+    rt = runtime(repos={"acme/marketing": {"writes": "acme/vault-private", "reads": ["kabir/vault-recipes"]}})
     r = resolve(at(tmp_path, "https://github.com/acme/marketing.git"), rt)
-    assert (r["writes"], r["how"]) == ("acme-private", "repos")
-    assert r["reads"] == ["acme-hq", "acme-kabir-personal", "acme-public", "local-recipes"]
+    assert (r["writes"], r["how"]) == ("acme/vault-private", "repos")
+    assert r["reads"] == ["acme/vault-hq", "acme/vault-kabir-personal", "acme/vault-public", "kabir/vault-recipes"]
 
 
 def test_a_repos_entry_with_only_reads_adds_them(tmp_path):
-    rt = runtime(repos={"acme/marketing": {"writes": None, "reads": ["local-recipes"]}})
+    rt = runtime(repos={"acme/marketing": {"writes": None, "reads": ["kabir/vault-recipes"]}})
     r = resolve(at(tmp_path, "https://github.com/acme/marketing.git"), rt)
-    assert (r["writes"], r["how"]) == ("acme-public", "notes_from")
-    assert r["reads"][-1] == "local-recipes"
+    assert (r["writes"], r["how"]) == ("acme/vault-public", "notes_from")
+    assert r["reads"][-1] == "kabir/vault-recipes"
 
 
 def test_an_owner_wide_entry_adds_reads_to_every_repo(tmp_path):
     rt = runtime(repos={"acme/*": {"writes": None, "reads": ["kabir-side"]},
-                        "acme/marketing": {"writes": None, "reads": ["local-recipes"]}})
+                        "acme/marketing": {"writes": None, "reads": ["kabir/vault-recipes"]}})
     r = resolve(at(tmp_path, "https://github.com/acme/marketing.git"), rt)
-    assert r["reads"][-2:] == ["kabir-side", "local-recipes"]
+    assert r["reads"][-2:] == ["kabir-side", "kabir/vault-recipes"]
     r = resolve(at(tmp_path, "https://github.com/acme/billing.git", "billing"), rt)
     assert r["reads"][-1] == "kabir-side"
-    rt["repos"]["acme/*"]["writes"] = "acme-public"
-    assert resolve(at(tmp_path, "https://github.com/acme/billing.git", "billing2"), rt)["writes"] == "acme-public"
+    rt["repos"]["acme/*"]["writes"] = "acme/vault-public"
+    assert resolve(at(tmp_path, "https://github.com/acme/billing.git", "billing2"), rt)["writes"] == "acme/vault-public"
 
 
 def test_a_folders_entry_counts_outside_joined_repos(tmp_path):
     writing = tmp_path / "writing"
     (writing / "drafts").mkdir(parents=True)
-    rt = runtime(folders={str(writing.resolve()): {"writes": "local-recipes", "reads": ["kabir-side"]}})
+    rt = runtime(folders={str(writing.resolve()): {"writes": "kabir/vault-recipes", "reads": ["kabir-side"]}})
     r = resolve(str(writing / "drafts"), rt)
-    assert (r["writes"], r["reads"], r["how"], r["folder"]) == ("local-recipes", ["kabir-side"], "folder",
+    assert (r["writes"], r["reads"], r["how"], r["folder"]) == ("kabir/vault-recipes", ["kabir-side"], "folder",
                                                                  str(writing.resolve()))
     # A folder entry without writes uses your personal vault.
     rt["folders"][str(writing.resolve())]["writes"] = None
-    assert resolve(str(writing), rt)["writes"] == "kabir-personal"
+    assert resolve(str(writing), rt)["writes"] == "kabir/vault-kabir-personal"
 
 
 def test_a_folders_entry_doesnt_count_in_a_joined_repo(tmp_path):
     repo = clone_at(tmp_path / "code" / "marketing", "https://github.com/acme/marketing.git")
-    rt = runtime(folders={str((tmp_path / "code").resolve()): {"writes": "local-recipes", "reads": []}})
-    assert resolve(str(repo), rt)["writes"] == "acme-public"
+    rt = runtime(folders={str((tmp_path / "code").resolve()): {"writes": "kabir/vault-recipes", "reads": []}})
+    assert resolve(str(repo), rt)["writes"] == "acme/vault-public"
 
 
 def test_the_root_is_the_repos_top_folder(tmp_path):

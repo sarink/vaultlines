@@ -1,13 +1,16 @@
 """The Basic Memory plugin.
 
-One Basic Memory server serves every vault: each vault is a Basic Memory project with
-the vault's name. The hook asks `on_call()` which vaults a call touches:
+One Basic Memory server serves every vault: each vault is a Basic Memory project named
+by the vault's ID, like acme/vault-public. The hook asks `on_call()` which vaults a call
+touches:
 
   - The tool name says read or write.
-  - `project` names the vault. If it's missing, the hook fills in the folder's
-    `writes` vault, so a call never falls through to Basic Memory's default project.
-  - A `memory://` link whose first segment is a project routes the call there,
-    so that vault counts too.
+  - `project` names the vault. If it's missing, the hook fills it in: the vault a
+    `memory://` link starts with, or else the session's `writes` vault, so a call never
+    falls through to Basic Memory's default project. (Without a project, Basic Memory
+    reads memory://acme/... as a link into a cloud workspace named acme.)
+  - A `memory://` link that starts with a project's name routes the call there, so that
+    vault counts too.
   - Anything that could reach other projects in a way vl can't check is blocked:
     `project_id`, `workspace`, `search_all_projects`, `recent_activity` with no
     project, the `search` and `fetch` tools, and any argument not listed below.
@@ -111,13 +114,12 @@ def _memory_urls(value) -> list[str]:
     return []
 
 
-def _url_project(url: str) -> str | None:
-    """The first segment of a memory:// URL, if the URL has more than one."""
+def _url_project(url: str, by_norm: dict[str, str]) -> str | None:
+    """The project a memory:// URL starts with: the longest project name followed by more
+    of the path. `by_norm`: norm(name) -> name."""
     path = url.strip()[len("memory://"):].strip("/")
-    if "/" not in path:
-        return None
-    first, rest = path.split("/", 1)
-    return None if not first or not rest or "*" in first else first
+    found = [p for n, p in by_norm.items() if norm(path).startswith(n + "/") and len(path) > len(n) + 1]
+    return max(found, key=len, default=None)
 
 
 def resolve(tool: str, args: dict, projects: list[str], default_project: str | None) -> Resolved:
@@ -151,27 +153,25 @@ def resolve(tool: str, args: dict, projects: list[str], default_project: str | N
         return Resolved(kind)
 
     by_norm = {norm(p): p for p in projects}
+    linked = [p for p in (_url_project(url, by_norm) for url in _memory_urls(args)) if p]
     used: list[str] = []
     project = args.get("project")
     updated = None
     if project is None or (isinstance(project, str) and not project.strip()):
         if tool in NEEDS_PROJECT:
             return Resolved(kind, block=f"Pass project=\"...\" to {tool}; without it, it looks at every vault.")
-        if default_project is None:
+        fill = linked[0] if linked else default_project
+        if fill is None:
             return Resolved(kind, block="No vaults are set up here.")
-        updated = {**args, "project": default_project}
-        used.append(default_project)
-    elif not isinstance(project, str) or "/" in project.strip().strip("/"):
-        return Resolved(kind, block="Pass project as a plain vault name, like project=\"notes\".")
+        updated = {**args, "project": fill}
+        used.append(fill)
+    elif not isinstance(project, str):
+        return Resolved(kind, block="Pass project as a vault ID, like project=\"acme/vault-public\".")
     elif norm(project) in by_norm:
         used.append(by_norm[norm(project)])
     else:
         used.append(project.strip())  # not a Basic Memory project; the hook reports it
-
-    for url in _memory_urls(args):
-        first = _url_project(url)
-        if first and norm(first) in by_norm and by_norm[norm(first)] not in used:
-            used.append(by_norm[norm(first)])
+    used += [p for p in dict.fromkeys(linked) if p not in used]
     return Resolved(kind, used, updated_input=updated)
 
 
@@ -315,37 +315,53 @@ def mcp_argv(settings: dict) -> list[str]:
     return [*_cmd(settings), "mcp"]
 
 
-def projects(settings: dict) -> dict[str, Path]:
+def _listing(settings: dict) -> dict:
     from ..util import VlError, run
 
     out = run([*_cmd(settings), "tool", "list-projects"]).stdout
     start = out.find("{")
     if start < 0:
         raise VlError(f"Couldn't read Basic Memory projects:\n{out}")
-    data = json.JSONDecoder().raw_decode(out[start:])[0]
-    return {p["name"]: Path(p["path"]).resolve() for p in data.get("projects", [])}
+    return json.JSONDecoder().raw_decode(out[start:])[0]
 
 
-def ensure_project(settings: dict, name: str, path: Path, current: dict[str, Path] | None = None) -> None:
-    """Register a vault as a Basic Memory project with the vault's name."""
+def projects(settings: dict) -> dict[str, Path]:
+    return {p["name"]: Path(p["path"]).resolve() for p in _listing(settings).get("projects", [])}
+
+
+def default_project(settings: dict) -> str | None:
+    return _listing(settings).get("default_project")
+
+
+def ensure_project(settings: dict, name: str, path: Path, current: dict[str, Path] | None = None) -> bool:
+    """Register a vault as a Basic Memory project named by the vault's ID. Returns True if
+    it added the project, which Basic Memory indexes when its server starts."""
     from ..util import VlError, run
 
     path = path.resolve()
     current = projects(settings) if current is None else current
     if current.get(name) == path:
-        return
+        return False
     if name in current:
         raise VlError(
             f"Basic Memory already has a project '{name}' at {current[name]}, not {path}. "
-            f"Remove it with `{command(settings)} project remove {name}` or pick another name."
+            f"Remove it with `{command(settings)} project remove {name}`."
         )
     for other, other_path in list(current.items()):
         if other_path == path:
-            # Same folder under another name: re-register it under the vault name.
+            # The folder under another name: re-register it under the vault's ID. Projects can't
+            # share a folder, and Basic Memory won't remove its default, so another stands in.
+            if default_project(settings) == other:
+                stand_in = next((p for p in current if p != other), None)
+                if stand_in is None:
+                    raise VlError(f"Basic Memory knows {path} as '{other}', its only project, so it can't be "
+                                  f"renamed to '{name}'. Add any other project, then run `vl apply` again.")
+                set_default(settings, stand_in)
             run([*_cmd(settings), "project", "remove", other])
             del current[other]
     run([*_cmd(settings), "project", "add", name, str(path)])
     current[name] = path
+    return True
 
 
 def remove_project(settings: dict, name: str) -> None:
@@ -415,33 +431,35 @@ def init(cfg: Config, settings: dict) -> None:
 
 
 def apply(cfg: Config, settings: dict, state: dict, warnings: list[str]) -> dict:
-    """Register every vault as a project named by its short name, add the one server, and
-    point the plugin at your personal vault (and, in repos, at the repo's vault)."""
+    """Register every vault as a project named by its ID, add the one server, and point the
+    plugin at your personal vault (and, in repos, at the repo's vault)."""
     from .. import claude
+    from ..util import say
 
     current = projects(settings)
-    shorts = cfg.shorts
     paths = {str(v.path.resolve()) for v in cfg.vaults.values()}
     for name in state.get("projects", []):
-        # A vault that's gone (you left its owner) or renamed: its project goes too.
-        if name in current and name not in shorts.values() and str(current[name]) not in paths:
+        # A vault that's gone (you left its owner): its project goes too.
+        if name in current and name not in cfg.vaults and str(current[name]) not in paths:
             remove_project(settings, name)
             del current[name]
-    for vid, v in cfg.vaults.items():
-        if v.path.exists():
-            ensure_project(settings, shorts[vid], v.path, current)
+    added = [vid for vid, v in sorted(cfg.vaults.items())
+             if v.path.exists() and ensure_project(settings, vid, v.path, current)]
     argv = mcp_argv(settings)
     server = claude.user_servers().get(SERVER)
     if server is None or not claude.same_server(server, argv):
         claude.add_server(SERVER, argv, "user")
     mine = cfg.personal(cfg.me) if cfg.me else None
-    if mine and shorts[mine] in current:
-        set_default(settings, shorts[mine])
+    if mine and mine in current:
+        set_default(settings, mine)
     blocks = []
     if mine:  # before `vl init` there's no personal vault: leave the block alone
-        _set_block(claude.plugin_user_settings_path(), shorts[mine], warnings)
+        _set_block(claude.plugin_user_settings_path(), mine, warnings)
         blocks.append(str(claude.plugin_user_settings_path()))
-    return {"projects": sorted(shorts[vid] for vid in cfg.vaults), "blocks": blocks}
+    if added:
+        say(f"New in Basic Memory: {', '.join(added)}. Restart Claude sessions to index "
+            f"{'it' if len(added) == 1 else 'them'}.")
+    return {"projects": sorted(cfg.vaults), "blocks": blocks}
 
 
 def off(state: dict, warnings: list[str]) -> None:
@@ -461,8 +479,7 @@ def off(state: dict, warnings: list[str]) -> None:
 
 
 def data(cfg: Config, settings: dict) -> dict:
-    shorts = cfg.shorts
-    by_path = {str(v.path.resolve()): shorts[vid] for vid, v in cfg.vaults.items()}
+    by_path = {str(v.path.resolve()): vid for vid, v in cfg.vaults.items()}
     return {"plugin": plugin_installed(),
             "projects": {p: by_path.get(str(folder)) for p, folder in sorted(projects(settings).items())}}
 
@@ -479,10 +496,8 @@ def doctor(cfg: Config, settings: dict, check) -> None:
     check(bool(found), f"{tool}: {found or 'not found'}")
     check(setting(settings, "disable_permalinks").lower().endswith("true"), "permalinks off", "vl init")
     current = projects(settings)
-    shorts = cfg.shorts
     for vid, v in sorted(cfg.vaults.items()):
-        check(current.get(shorts[vid]) == v.path.resolve(), f"{vid} is the Basic Memory project '{shorts[vid]}'",
-              "vl apply")
+        check(current.get(vid) == v.path.resolve(), f"{vid} is a Basic Memory project", "vl apply")
     server = claude.user_servers().get(SERVER)
     check(server is not None and claude.same_server(server, mcp_argv(settings)),
           f"one '{SERVER}' server for every vault", "vl apply")
@@ -491,5 +506,4 @@ def doctor(cfg: Config, settings: dict, check) -> None:
     if mine:
         path = claude.plugin_user_settings_path()
         block = read_json(path, {}).get("basicMemory") or {}
-        check(block.get("primaryProject") == shorts[mine], f"{contract(path)}: plugin writes to {shorts[mine]}",
-              "vl apply")
+        check(block.get("primaryProject") == mine, f"{contract(path)}: plugin writes to {mine}", "vl apply")

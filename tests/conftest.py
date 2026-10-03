@@ -9,22 +9,23 @@ from pathlib import Path
 import pytest
 
 ME = "sam"
-# short name -> (vault ID, who can see it)
+# vault ID -> who can see it
 VAULTS = {
-    "sam-personal": ("sam/vault-sam-personal", {"kind": "me"}),
-    "sam-side": ("sam/vault-side", {"kind": "people", "logins": ["sam"]}),
-    "acme-founders": ("acme/vault-founders", {"kind": "people", "logins": ["sam", "Lee"]}),
-    "acme-everyone": ("acme/vault-everyone", {"kind": "people", "logins": ["sam", "Lee", "ana"]}),
-    "acme-slack": ("acme/vault-slack", {"kind": "people", "logins": ["sam", "Lee", "ana"]}),
-    "acme-handbook": ("acme/vault-handbook", {"kind": "unknown", "reason": "you have read-only access"}),
-    "acme-docs": ("acme/vault-docs", {"kind": "everyone"}),
-    "acme-sam-personal": ("acme/vault-sam-personal", {"kind": "me"}),
-    "acme-drive": ("acme/vault-drive", {"kind": "people", "logins": ["sam", "Lee"]}),
-    "sam-recipes": ("sam/vault-recipes", {"kind": "me"}),  # on this computer only
+    "sam/vault-sam-personal": {"kind": "me"},
+    "sam/vault-side": {"kind": "people", "logins": ["sam"]},
+    "acme/vault-founders": {"kind": "people", "logins": ["sam", "Lee"]},
+    "acme/vault-everyone": {"kind": "people", "logins": ["sam", "Lee", "ana"]},
+    "acme/vault-slack": {"kind": "people", "logins": ["sam", "Lee", "ana"]},
+    "acme/vault-handbook": {"kind": "unknown", "reason": "you have read-only access"},
+    "acme/vault-docs": {"kind": "everyone"},
+    "acme/vault-sam-personal": {"kind": "me"},
+    "acme/vault-drive": {"kind": "people", "logins": ["sam", "Lee"]},
+    "sam/vault-recipes": {"kind": "me"},  # local
 }
-ABOUT = {"acme-everyone": "Notes everyone at Acme can see.", "acme-founders": "Founders' notes: fundraising, hiring.",
-         "acme-drive": "The text of every file in the Acme shared drive. Claude only reads it.",
-         "sam-personal": "sam's personal notes."}
+ABOUT = {"acme/vault-everyone": "Notes everyone at Acme can see.",
+         "acme/vault-founders": "Founders' notes: fundraising, hiring.",
+         "acme/vault-drive": "The text of every file in the Acme shared drive. Claude only reads it.",
+         "sam/vault-sam-personal": "sam's personal notes."}
 
 
 def git_repo(path: Path, *urls: str) -> Path:
@@ -57,44 +58,44 @@ class World:
         self.writing = self.home / "writing"  # a [folders] entry
         for d in (self.api, self.desktop, self.writing):
             d.mkdir(parents=True)
-        self.ids = {short: vid for short, (vid, _) in VAULTS.items()}
-        for vid in self.ids.values():
+        for vid in VAULTS:
             (self.vaults / vid).mkdir(parents=True)
         self.fetch = self.vl / "cache" / "fetch" / "acme" / "vault-drive"
-        acme = sorted(s for s, vid in self.ids.items() if vid.startswith("acme/"))
+        acme = sorted(vid for vid in VAULTS if vid.startswith("acme/"))
         self.runtime = {
-            "version": 4,
+            "version": 5,
             "written_at": 0,
             "config": str(self.vl / "config.toml"),
             "me": ME,
             "on_leak": "ask",
-            "vaults": {short: {"id": vid, "paths": [str(self.vaults / vid)], "show": f"~/.vaultlines/vaults/{vid}",
-                               "about": ABOUT.get(short, ""),
-                               "audience": {"logins": [], "reason": "", **copy.deepcopy(aud)}}
-                       for short, (vid, aud) in VAULTS.items()},
+            "vaults": {vid: {"paths": [str(self.vaults / vid)], "show": f"~/.vaultlines/vaults/{vid}",
+                             "about": ABOUT.get(vid, ""),
+                             "audience": {"logins": [], "reason": "", **copy.deepcopy(aud)}}
+                       for vid, aud in VAULTS.items()},
             "owners": {
-                "acme": {"personal": "acme-sam-personal", "vaults": acme,
-                         "notes_from": {"acme/site": "acme-everyone", "acme/app": "acme-everyone",
-                                        "acme/legal": "acme-founders"},
-                         "conflicts": {"acme/both": ["acme-everyone", "acme-founders"]}},
-                "sam": {"personal": "sam-personal", "vaults": ["sam-personal", "sam-recipes", "sam-side"], "notes_from": {},
-                        "conflicts": {}},
+                "acme": {"personal": "acme/vault-sam-personal", "vaults": acme,
+                         "notes_from": {"acme/site": "acme/vault-everyone", "acme/app": "acme/vault-everyone",
+                                        "acme/legal": "acme/vault-founders"},
+                         "conflicts": {"acme/both": ["acme/vault-everyone", "acme/vault-founders"]}},
+                "sam": {"personal": "sam/vault-sam-personal",
+                        "vaults": ["sam/vault-recipes", "sam/vault-sam-personal", "sam/vault-side"],
+                        "notes_from": {}, "conflicts": {}},
             },
             "repos": {},
-            "folders": {str(self.writing): {"writes": "sam-recipes", "reads": []}},
-            "default": {"writes": "sam-personal", "reads": []},
+            "folders": {str(self.writing): {"writes": "sam/vault-recipes", "reads": []}},
+            "default": {"writes": "sam/vault-sam-personal", "reads": []},
             "plugins": {
                 "basic-memory": {
                     "kind": "basic-memory",
                     "tool_prefixes": ["mcp__basic-memory__"],
-                    "data": {"plugin": True, "projects": {**{s: s for s in VAULTS}, "main": None}},
+                    "data": {"plugin": True, "projects": {**{vid: vid for vid in VAULTS}, "main": None}},
                 },
             },
         }
-        self.runtime["vaults"]["acme-drive"].update(source="gdrive", fetch=[str(self.fetch)])
+        self.runtime["vaults"]["acme/vault-drive"].update(source="gdrive", fetch=[str(self.fetch)])
 
-    def vault(self, short: str, *rest: str) -> str:
-        return str(self.vaults.joinpath(self.ids[short], *rest))
+    def vault(self, vault_id: str, *rest: str) -> str:
+        return str(self.vaults.joinpath(vault_id, *rest))
 
 
 @pytest.fixture

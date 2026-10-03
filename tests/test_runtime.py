@@ -25,7 +25,7 @@ def make(tmp_path, monkeypatch) -> Config:
     return cfg
 
 
-def test_build_v4(tmp_path, monkeypatch):
+def test_build_v5(tmp_path, monkeypatch):
     cfg = make(tmp_path, monkeypatch)
     cfg.repos["acme/website"] = Rule("acme/website", "acme/vault-public", ["kabir/vault-recipes"], True)
     cfg.folders[str(tmp_path / "writing")] = Rule(str(tmp_path / "writing"), "kabir/vault-recipes", [])
@@ -33,30 +33,30 @@ def test_build_v4(tmp_path, monkeypatch):
     auds = {"acme/vault-public": Audience("people", ("kabir", "ana"))}
     data = {"basic-memory": {"plugin": True, "projects": {}}}
     out = runtime.build(cfg, auds, data, warnings=warnings)
-    assert out["version"] == runtime.VERSION == 4
+    assert out["version"] == runtime.VERSION == 5
     assert out["me"] == "kabir"
-    assert sorted(out["vaults"]) == ["acme-hq", "acme-kabir-personal", "acme-private", "acme-public",
-                                     "kabir-personal", "kabir-recipes"]
-    public = out["vaults"]["acme-public"]
-    assert public["id"] == "acme/vault-public" and public["about"] == "Everyone."
+    assert sorted(out["vaults"]) == ["acme/vault-hq", "acme/vault-kabir-personal", "acme/vault-private", "acme/vault-public",
+                                     "kabir/vault-kabir-personal", "kabir/vault-recipes"]
+    public = out["vaults"]["acme/vault-public"]
+    assert "id" not in public and public["about"] == "Everyone."
     assert public["paths"] == [str((tmp_path / "vl" / "vaults" / "acme" / "vault-public").resolve())]
     assert public["audience"] == {"kind": "people", "logins": ["kabir", "ana"], "reason": ""}
-    assert out["vaults"]["acme-private"]["audience"]["reason"] == "not checked yet"
-    hq = out["vaults"]["acme-hq"]
+    assert out["vaults"]["acme/vault-private"]["audience"]["reason"] == "not checked yet"
+    hq = out["vaults"]["acme/vault-hq"]
     assert hq["source"] == "gdrive"
     assert hq["fetch"] == [str((tmp_path / "vl").resolve() / "cache" / "fetch" / "acme" / "vault-hq")]
     assert "source" not in public
 
     acme = out["owners"]["acme"]
-    assert acme["personal"] == "acme-kabir-personal"
-    assert acme["vaults"] == ["acme-hq", "acme-kabir-personal", "acme-private", "acme-public"]
-    assert acme["notes_from"] == {"acme/legal-case": "acme-private", "acme/marketing": "acme-public"}
-    assert acme["conflicts"] == {"acme/studio": ["acme-private", "acme-public"]}
-    assert out["owners"]["kabir"] == {"personal": "kabir-personal", "vaults": ["kabir-personal", "kabir-recipes"],
+    assert acme["personal"] == "acme/vault-kabir-personal"
+    assert acme["vaults"] == ["acme/vault-hq", "acme/vault-kabir-personal", "acme/vault-private", "acme/vault-public"]
+    assert acme["notes_from"] == {"acme/legal-case": "acme/vault-private", "acme/marketing": "acme/vault-public"}
+    assert acme["conflicts"] == {"acme/studio": ["acme/vault-private", "acme/vault-public"]}
+    assert out["owners"]["kabir"] == {"personal": "kabir/vault-kabir-personal", "vaults": ["kabir/vault-kabir-personal", "kabir/vault-recipes"],
                                       "notes_from": {}, "conflicts": {}}
-    assert out["repos"] == {"acme/website": {"writes": "acme-public", "reads": ["kabir-recipes"]}}
-    assert out["folders"] == {str(tmp_path / "writing"): {"writes": "kabir-recipes", "reads": []}}
-    assert out["default"] == {"writes": "kabir-personal", "reads": []}
+    assert out["repos"] == {"acme/website": {"writes": "acme/vault-public", "reads": ["kabir/vault-recipes"]}}
+    assert out["folders"] == {str(tmp_path / "writing"): {"writes": "kabir/vault-recipes", "reads": []}}
+    assert out["default"] == {"writes": "kabir/vault-kabir-personal", "reads": []}
     assert out["plugins"]["basic-memory"]["tool_prefixes"] == ["mcp__basic-memory__"]
     assert any("kabir/blog, which belongs to another owner" in w for w in warnings)
     assert any("acme/vault-hq: notes_from is ignored" in w for w in warnings)
@@ -68,7 +68,7 @@ def test_config_entries_for_vaults_that_arent_here_are_left_out(tmp_path, monkey
     cfg.repos["acme/y"] = Rule("acme/y", "acme/vault-hq")
     warnings = []
     out = runtime.build(cfg, {}, {}, warnings=warnings)
-    assert out["repos"]["acme/x"] == {"writes": None, "reads": ["acme-hq"]}
+    assert out["repos"]["acme/x"] == {"writes": None, "reads": ["acme/vault-hq"]}
     assert out["repos"]["acme/y"] == {"writes": None, "reads": []}
     assert any("no vault acme/vault-gone" in w for w in warnings)
     assert any("acme/vault-hq comes from gdrive, so notes can't be saved there" in w for w in warnings)
@@ -77,10 +77,10 @@ def test_config_entries_for_vaults_that_arent_here_are_left_out(tmp_path, monkey
 def test_lost_vaults_stay_known_but_arent_used(tmp_path, monkeypatch):
     cfg = make(tmp_path, monkeypatch)
     out = runtime.build(cfg, {}, {}, lost={"acme/vault-private"})
-    assert out["vaults"]["acme-private"]["lost"] is True
-    assert "acme-private" not in out["owners"]["acme"]["vaults"]
-    assert out["owners"]["acme"]["notes_from"] == {"acme/marketing": "acme-public",
-                                                       "acme/studio": "acme-public"}
+    assert out["vaults"]["acme/vault-private"]["lost"] is True
+    assert "acme/vault-private" not in out["owners"]["acme"]["vaults"]
+    assert out["owners"]["acme"]["notes_from"] == {"acme/marketing": "acme/vault-public",
+                                                       "acme/studio": "acme/vault-public"}
 
 
 def test_stale(tmp_path, monkeypatch):

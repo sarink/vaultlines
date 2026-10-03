@@ -168,7 +168,7 @@ def _for_repo(repo: str, root: str, owner: dict, runtime: dict) -> dict:
 def resolve(project_dir: str, runtime: dict) -> dict:
     """The session's rules: {"writes": vault, "reads": [vaults], "how": why, "repo": OWNER/REPO
     or None, "root": the repo's top folder or None, "folder": the [folders] entry or None}.
-    Vaults are short names from runtime.json."""
+    Vaults are IDs, as in runtime.json."""
     from .util import closest_parent
 
     found = repo_of(project_dir) if project_dir else None

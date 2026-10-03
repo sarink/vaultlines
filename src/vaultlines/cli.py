@@ -150,7 +150,7 @@ def _join(owner: str, me: str) -> list[str]:
     if not vlt.path_of(personal).exists():
         _new_vault(personal, _personal_about(owner, me))
         new.append(personal)
-        say(f"Made your personal vault {personal}, on this computer only. "
+        say(f"Made your personal vault {personal}, local: on this computer only. "
             f"To put it on GitHub: `vl vault publish {personal}`")
     return new
 
@@ -243,9 +243,8 @@ def cmd_org_join(args) -> None:
         raise
     cfg = config.load()
     _apply(cfg)
-    shorts = cfg.shorts
     say(f"\nJoined {owner}. Its vaults on this computer:")
-    _table([(vid, shorts[vid], v.about or "-") for vid, v in sorted(cfg.vaults.items()) if v.owner == owner])
+    _table([(vid, v.about or "-") for vid, v in sorted(cfg.vaults.items()) if v.owner == owner])
     for vid, v in sorted(cfg.vaults.items()):
         kind = plugins.SOURCES.get((v.source or {}).get("kind"))
         if v.owner == owner and kind and hasattr(kind, "saved_login") and not kind.validate_source(v.source) \
@@ -328,7 +327,7 @@ def cmd_vault_create(args) -> None:
     if args.source:
         return _create_with_source(args, vault_id, notes_from)
     _new_vault(vault_id, args.about or "", notes_from)
-    say(f"Made {vault_id}, on this computer only.")
+    say(f"Made {vault_id}, local: on this computer only.")
     if args.publish:
         _publish(config.load(), vault_id)
     else:
@@ -554,7 +553,7 @@ def cmd_source_fetch(args) -> None:
     v, kind, source = _source_vault(args.vault)
     if not hasattr(kind, "fetch"):
         raise VlError(f"{kind.NAME} sources have no originals to fetch.")
-    say(str(kind.fetch(v, source, config.load().shorts[v.id], args.path)))
+    say(str(kind.fetch(v, source, args.path)))
 
 
 def cmd_source_login(args) -> None:
@@ -805,7 +804,7 @@ def _report_hook_warnings(cfg: Config, stamp, background: bool) -> None:
 # ---------------------------------------------------------------- check / status / sessions / doctor
 
 def preview(writes: str, reads: list[str], auds: dict[str, Audience], me: str) -> list[str]:
-    """Where writes will ask, given who can see each vault. Vaults are short names."""
+    """Where writes will ask, given who can see each vault."""
     def aud(name: str) -> dict:
         a = auds.get(name) or audience.unknown("not checked yet")
         return {"kind": a.kind, "logins": list(a.logins), "reason": a.reason}
@@ -845,7 +844,7 @@ def _vault_state(v: vlt.Vault, gone: set[str]) -> str:
         when = gitsync.git(v.path, "log", "-1", "--format=%cr", f"--grep=Update from {name}", check=False).stdout.strip()
         return f"from {name}, refreshed {when or 'never'}"
     pending = gitsync.pending_changes(v.path)
-    where = "published" if v.remote else "this computer only"
+    where = "published" if v.remote else "local"
     return f"{where}, last commit {gitsync.last_commit_age(v.path)}" + (f", {pending} unsaved" if pending else "")
 
 
@@ -856,22 +855,21 @@ def cmd_status(args) -> None:
         return
     me = cfg.me
     auds, _ = audience.audiences(cfg.vaults, fresh=False)
-    shorts = cfg.shorts
     gone = lost(cfg)
     data = runtime.load() or {}
     owners = sorted({v.owner for v in cfg.vaults.values()} | set(cfg.owners), key=lambda o: (o != me, o))
     for owner in owners:
         say(_owner_title(owner, me))
-        rows = [("vault", "name", "state", "who can see it")]
+        rows = [("vault", "state", "who can see it")]
         for vid, v in sorted(cfg.vaults.items()):
             if v.owner == owner:
-                rows.append((vid, shorts[vid], _vault_state(v, gone), auds[vid].describe()))
+                rows.append((vid, _vault_state(v, gone), auds[vid].describe()))
         if len(rows) > 1:
             _table(rows)
         o = (data.get("owners") or {}).get(owner)
         if o:
-            for repo, short in o["notes_from"].items():
-                say(f"  notes from {repo} -> {short}")
+            for repo, vid in o["notes_from"].items():
+                say(f"  notes from {repo} -> {vid}")
             for repo, claims in o["conflicts"].items():
                 say(f"  CONFLICT: {repo} is in notes_from of {' and '.join(claims)}, so its notes go to "
                     f"{o['personal']}. Remove it from all but one vault.toml.")
@@ -886,10 +884,9 @@ def cmd_status(args) -> None:
                          "yes" if rule.auto_pull else ""))
         _table(rows)
         say("")
-    shorts_auds = {shorts[vid]: a for vid, a in auds.items()}
     asks = [line for o in (data.get("owners") or {}).values()
             for w in sorted({o["personal"], *o["notes_from"].values()} - {None})
-            for line in preview(w, [v for v in o["vaults"] if v != w], shorts_auds, me)]
+            for line in preview(w, [v for v in o["vaults"] if v != w], auds, me)]
     say("Where writes will ask")
     for line in asks or ["never"]:
         say(f"  {line}")

@@ -59,7 +59,7 @@ def reason(out):
     return out["hookSpecificOutput"].get("permissionDecisionReason", "")
 
 
-ACME = ["acme-docs", "acme-drive", "acme-everyone", "acme-founders", "acme-handbook", "acme-sam-personal", "acme-slack"]
+ACME = ["acme/vault-docs", "acme/vault-drive", "acme/vault-everyone", "acme/vault-founders", "acme/vault-handbook", "acme/vault-sam-personal", "acme/vault-slack"]
 
 
 def others(writes):
@@ -69,16 +69,16 @@ def others(writes):
 # ---------------------------------------------------------------- which vaults a session uses
 
 @pytest.mark.parametrize("where, writes, reads", [
-    ("site", "acme-everyone", others("acme-everyone")),      # in notes_from
-    ("api", "acme-everyone", others("acme-everyone")),       # a folder inside that repo
-    ("app", "acme-everyone", others("acme-everyone")),       # cloned anywhere
-    ("legal", "acme-founders", others("acme-founders")),
-    ("billing", "acme-sam-personal", others("acme-sam-personal")),  # in no notes_from
-    ("both", "acme-sam-personal", others("acme-sam-personal")),    # in two notes_from
-    ("blog", "sam-personal", ["sam-recipes", "sam-side"]),   # your own account
-    ("oss", "sam-personal", []),                             # an owner you didn't join
-    ("desktop", "sam-personal", []),                         # no repo
-    ("writing", "sam-recipes", []),                          # a [folders] entry
+    ("site", "acme/vault-everyone", others("acme/vault-everyone")),      # in notes_from
+    ("api", "acme/vault-everyone", others("acme/vault-everyone")),       # a folder inside that repo
+    ("app", "acme/vault-everyone", others("acme/vault-everyone")),       # cloned anywhere
+    ("legal", "acme/vault-founders", others("acme/vault-founders")),
+    ("billing", "acme/vault-sam-personal", others("acme/vault-sam-personal")),  # in no notes_from
+    ("both", "acme/vault-sam-personal", others("acme/vault-sam-personal")),    # in two notes_from
+    ("blog", "sam/vault-sam-personal", ["sam/vault-recipes", "sam/vault-side"]),   # your own account
+    ("oss", "sam/vault-sam-personal", []),                             # an owner you didn't join
+    ("desktop", "sam/vault-sam-personal", []),                         # no repo
+    ("writing", "sam/vault-recipes", []),                          # a [folders] entry
 ])
 def test_where_claude_starts_decides_the_vaults(world, where, writes, reads):
     s = Session(world, getattr(world, where))
@@ -87,59 +87,59 @@ def test_where_claude_starts_decides_the_vaults(world, where, writes, reads):
 
 def test_focus_blocks_another_owners_vault(world):
     s = Session(world, world.site)
-    out = s.call("Read", file_path=world.vault("sam-side", "idea.md"))
+    out = s.call("Read", file_path=world.vault("sam/vault-side", "idea.md"))
     assert decision(out) == "deny"
-    assert "`sam-side` isn't used here" in reason(out)
-    assert "This session uses acme-everyone, acme-docs" in reason(out)
+    assert "`sam/vault-side` isn't used here" in reason(out)
+    assert "This session uses acme/vault-everyone, acme/vault-docs" in reason(out)
 
 
 def test_focus_blocks_org_vaults_outside_org_repos(world):
     s = Session(world, world.desktop)
-    assert decision(s.call("Read", file_path=world.vault("acme-founders", "plan.md"))) == "deny"
-    assert decision(s.call("Read", file_path=world.vault("sam-personal", "x.md"))) is None
+    assert decision(s.call("Read", file_path=world.vault("acme/vault-founders", "plan.md"))) == "deny"
+    assert decision(s.call("Read", file_path=world.vault("sam/vault-sam-personal", "x.md"))) is None
 
 
 def test_a_config_entry_can_add_another_owners_vault(world):
-    world.runtime["repos"]["acme/*"] = {"writes": None, "reads": ["sam-side"]}
+    world.runtime["repos"]["acme/*"] = {"writes": None, "reads": ["sam/vault-side"]}
     s = Session(world, world.site)
-    assert decision(s.call("Read", file_path=world.vault("sam-side", "idea.md"))) is None
+    assert decision(s.call("Read", file_path=world.vault("sam/vault-side", "idea.md"))) is None
 
 
 def test_rules_come_from_the_repo_not_the_folder_it_is_in(world):
     # The site repo is inside ~/code, which a [folders] entry covers; the repo wins.
-    world.runtime["folders"][str(world.home / "code")] = {"writes": "sam-recipes", "reads": []}
-    assert Session(world, world.site).rules["writes"] == "acme-everyone"
-    assert Session(world, world.home / "code").rules["writes"] == "sam-recipes"
+    world.runtime["folders"][str(world.home / "code")] = {"writes": "sam/vault-recipes", "reads": []}
+    assert Session(world, world.site).rules["writes"] == "acme/vault-everyone"
+    assert Session(world, world.home / "code").rules["writes"] == "sam/vault-recipes"
 
 
 # ---------------------------------------------------------------- the label
 
 def test_same_audience_read_then_write_is_allowed(world):
     s = Session(world, world.site)
-    assert decision(s.call("Read", file_path=world.vault("acme-slack", "general.md"))) is None
-    assert decision(s.call("Write", file_path=world.vault("acme-everyone", "note.md"), content="x")) is None
+    assert decision(s.call("Read", file_path=world.vault("acme/vault-slack", "general.md"))) is None
+    assert decision(s.call("Write", file_path=world.vault("acme/vault-everyone", "note.md"), content="x")) is None
 
 
 def test_narrower_read_then_write_asks_and_names_the_new_people(world):
     s = Session(world, world.site)
-    s.call("Read", file_path=world.vault("acme-founders", "plan.md"))
-    out = s.call("Write", file_path=world.vault("acme-everyone", "note.md"), content="x")
+    s.call("Read", file_path=world.vault("acme/vault-founders", "plan.md"))
+    out = s.call("Write", file_path=world.vault("acme/vault-everyone", "note.md"), content="x")
     assert decision(out) == "ask"
-    assert "This session read acme-founders." in reason(out)
-    assert "ana would see this in acme-everyone" in reason(out)
+    assert "This session read acme/vault-founders." in reason(out)
+    assert "ana would see this in acme/vault-everyone" in reason(out)
 
 
 def test_wider_read_then_narrower_write_is_allowed(world):
     s = Session(world, world.legal)
-    s.call("Read", file_path=world.vault("acme-everyone", "a.md"))
-    assert decision(s.call("Edit", file_path=world.vault("acme-founders", "b.md"))) is None
+    s.call("Read", file_path=world.vault("acme/vault-everyone", "a.md"))
+    assert decision(s.call("Edit", file_path=world.vault("acme/vault-founders", "b.md"))) is None
 
 
 def test_reading_a_vault_only_you_see_makes_shared_writes_ask(world):
     s = Session(world, world.legal)
-    s.call("Read", file_path=world.vault("acme-sam-personal", "idea.md"))
+    s.call("Read", file_path=world.vault("acme/vault-sam-personal", "idea.md"))
     assert s.label == lbl.ONLY_YOU
-    out = s.call("Write", file_path=world.vault("acme-founders", "x.md"))
+    out = s.call("Write", file_path=world.vault("acme/vault-founders", "x.md"))
     assert decision(out) == "ask"
     assert "Lee would see this" in reason(out)
 
@@ -150,14 +150,14 @@ def test_other_tools_dont_change_the_label(world):
     assert s.call("WebFetch", url="https://example.com") is None
     assert s.call("mcp__claude_ai_Gmail__get_thread", id="1") is None
     assert s.state == before
-    assert decision(s.call("Write", file_path=world.vault("acme-everyone", "n.md"))) is None
+    assert decision(s.call("Write", file_path=world.vault("acme/vault-everyone", "n.md"))) is None
 
 
 def test_a_new_person_on_github_makes_a_safe_write_ask(world):
-    world.runtime["vaults"]["acme-everyone"]["audience"]["logins"].append("contractor")
+    world.runtime["vaults"]["acme/vault-everyone"]["audience"]["logins"].append("contractor")
     s = Session(world, world.site)
-    s.call("Read", file_path=world.vault("acme-slack", "general.md"))
-    out = s.call("Write", file_path=world.vault("acme-everyone", "note.md"))
+    s.call("Read", file_path=world.vault("acme/vault-slack", "general.md"))
+    out = s.call("Write", file_path=world.vault("acme/vault-everyone", "note.md"))
     assert decision(out) == "ask"
     assert "contractor would see this" in reason(out)
 
@@ -165,120 +165,120 @@ def test_a_new_person_on_github_makes_a_safe_write_ask(world):
 def test_on_leak_block_denies(world):
     world.runtime["on_leak"] = "block"
     s = Session(world, world.site)
-    s.call("Read", file_path=world.vault("acme-founders", "plan.md"))
-    out = s.call("Write", file_path=world.vault("acme-everyone", "note.md"))
+    s.call("Read", file_path=world.vault("acme/vault-founders", "plan.md"))
+    out = s.call("Write", file_path=world.vault("acme/vault-everyone", "note.md"))
     assert decision(out) == "deny"
     assert 'on_leak = "block"' in reason(out)
 
 
 def test_writing_a_reads_vault_always_asks(world):
     s = Session(world, world.site)
-    out = s.call("Write", file_path=world.vault("acme-slack", "x.md"))
+    out = s.call("Write", file_path=world.vault("acme/vault-slack", "x.md"))
     assert decision(out) == "ask"
-    assert "`acme-slack` is a read vault here" in reason(out)
+    assert "`acme/vault-slack` is a read vault here" in reason(out)
 
 
 def test_unknown_audience_read_counts_as_only_you(world):
     s = Session(world, world.billing)
-    s.call("Grep", pattern="x", path=world.vault("acme-handbook"))
+    s.call("Grep", pattern="x", path=world.vault("acme/vault-handbook"))
     assert s.label == lbl.ONLY_YOU
-    assert s.state["read"] == ["acme-handbook"]
+    assert s.state["read"] == ["acme/vault-handbook"]
 
 
 def test_public_read_changes_nothing(world):
     s = Session(world, world.site)
-    s.call("Read", file_path=world.vault("acme-docs", "readme.md"))
+    s.call("Read", file_path=world.vault("acme/vault-docs", "readme.md"))
     assert s.label is lbl.EVERYONE
-    assert s.state["read"] == ["acme-docs"]
+    assert s.state["read"] == ["acme/vault-docs"]
 
 
 def test_writing_an_unknown_audience_vault_after_a_restricted_read_asks(world):
-    world.runtime["repos"]["acme/billing"] = {"writes": "acme-handbook", "reads": []}
+    world.runtime["repos"]["acme/billing"] = {"writes": "acme/vault-handbook", "reads": []}
     s = Session(world, world.billing)
-    s.call("Read", file_path=world.vault("acme-founders", "x.md"))
-    out = s.call("Write", file_path=world.vault("acme-handbook", "x.md"))
+    s.call("Read", file_path=world.vault("acme/vault-founders", "x.md"))
+    out = s.call("Write", file_path=world.vault("acme/vault-handbook", "x.md"))
     assert decision(out) == "ask"
     assert "people vl can't list" in reason(out)
 
 
 def test_only_you_vault_takes_any_write(world):
     s = Session(world, world.billing)
-    s.call("Read", file_path=world.vault("acme-founders", "x.md"))
-    assert decision(s.call("Write", file_path=world.vault("acme-sam-personal", "x.md"))) is None
+    s.call("Read", file_path=world.vault("acme/vault-founders", "x.md"))
+    assert decision(s.call("Write", file_path=world.vault("acme/vault-sam-personal", "x.md"))) is None
 
 
 def test_denied_calls_dont_count_as_reads(world):
     s = Session(world, world.blog)
-    s.call("Read", file_path=world.vault("acme-founders", "plan.md"))
+    s.call("Read", file_path=world.vault("acme/vault-founders", "plan.md"))
     assert s.state["read"] == []
     assert s.label is lbl.EVERYONE
 
 
 def test_asked_calls_count_as_reads(world):
     s = Session(world, world.site)
-    s.call("Bash", command=f"cat {world.vault('acme-slack', 'x.md')}")
+    s.call("Bash", command=f"cat {world.vault('acme/vault-slack', 'x.md')}")
     assert decision(s.last) == "ask"
-    assert s.state["read"] == ["acme-slack"]
+    assert s.state["read"] == ["acme/vault-slack"]
 
 
 def test_login_case_doesnt_matter(world):
     world.runtime["me"] = "SAM"
-    world.runtime["vaults"]["acme-founders"]["audience"]["logins"] = ["Sam", "lee"]
+    world.runtime["vaults"]["acme/vault-founders"]["audience"]["logins"] = ["Sam", "lee"]
     s = Session(world, world.legal)
-    s.call("Read", file_path=world.vault("acme-everyone", "a.md"))
-    assert decision(s.call("Write", file_path=world.vault("acme-founders", "b.md"))) is None
+    s.call("Read", file_path=world.vault("acme/vault-everyone", "a.md"))
+    assert decision(s.call("Write", file_path=world.vault("acme/vault-founders", "b.md"))) is None
 
 
 # ---------------------------------------------------------------- vaults with a source
 
 def test_a_drive_vault_is_read_only(world):
     s = Session(world, world.site)
-    assert decision(s.call("Read", file_path=world.vault("acme-drive", "Finance", "Runway.xlsx.md"))) is None
+    assert decision(s.call("Read", file_path=world.vault("acme/vault-drive", "Finance", "Runway.xlsx.md"))) is None
     for tool in ("Write", "Edit"):
-        out = s.call(tool, file_path=world.vault("acme-drive", "x.md"), content="x")
+        out = s.call(tool, file_path=world.vault("acme/vault-drive", "x.md"), content="x")
         assert decision(out) == "deny"
-        assert "`acme-drive` comes from Google Drive" in reason(out)
-    out = s.bm("write_note", title="t", content="c", directory="d", project="acme-drive")
+        assert "`acme/vault-drive` comes from Google Drive" in reason(out)
+    out = s.bm("write_note", title="t", content="c", directory="d", project="acme/vault-drive")
     assert decision(out) == "deny"
 
 
 def test_a_drive_vault_is_read_only_even_where_config_says_writes(world):
-    world.runtime["repos"]["acme/site"] = {"writes": "acme-drive", "reads": []}  # vl apply leaves this out
+    world.runtime["repos"]["acme/site"] = {"writes": "acme/vault-drive", "reads": []}  # vl apply leaves this out
     s = Session(world, world.site)
-    assert decision(s.call("Write", file_path=world.vault("acme-drive", "x.md"))) == "deny"
+    assert decision(s.call("Write", file_path=world.vault("acme/vault-drive", "x.md"))) == "deny"
 
 
 def test_bash_on_a_drive_vault_only_reads(world):
     s = Session(world, world.site)
-    assert s.call("Bash", command=f"grep -r cash {world.vault('acme-drive')}") is None
-    assert s.state["read"] == ["acme-drive"]
+    assert s.call("Bash", command=f"grep -r cash {world.vault('acme/vault-drive')}") is None
+    assert s.state["read"] == ["acme/vault-drive"]
 
 
 def test_vl_source_fetch_is_a_read_of_its_vault(world):
     s = Session(world, world.site)
     assert s.call("Bash", command='vl source fetch acme/vault-drive "Finance/Runway.xlsx"') is None
-    assert s.state["read"] == ["acme-drive"]
-    out = s.call("Write", file_path=world.vault("acme-everyone", "x.md"))
-    assert decision(out) == "ask" and "ana would see this in acme-everyone" in reason(out)
+    assert s.state["read"] == ["acme/vault-drive"]
+    out = s.call("Write", file_path=world.vault("acme/vault-everyone", "x.md"))
+    assert decision(out) == "ask" and "ana would see this in acme/vault-everyone" in reason(out)
 
 
-def test_vl_source_fetch_by_short_name_too(world):
+def test_vl_source_fetch_names_a_vault_only_by_its_id(world):
     s = Session(world, world.site)
-    assert s.call("Bash", command="vl source fetch acme-drive x.pdf") is None
-    assert s.state["read"] == ["acme-drive"]
+    assert s.call("Bash", command="vl source fetch acme-drive x.pdf") is None  # vl itself refuses it
+    assert s.state["read"] == []
 
 
 def test_vl_source_fetch_of_a_vault_not_used_here_is_denied(world):
     s = Session(world, world.blog)
     out = s.call("Bash", command="cd /tmp && ~/.local/bin/vl source fetch 'acme/vault-drive' x.pdf")
     assert decision(out) == "deny"
-    assert "`acme-drive` isn't used here" in reason(out)
+    assert "`acme/vault-drive` isn't used here" in reason(out)
 
 
 def test_the_fetch_folder_counts_as_its_vault(world):
     s = Session(world, world.site)
     assert s.call("Read", file_path=str(world.fetch / "Finance" / "Runway.xlsx")) is None
-    assert s.state["read"] == ["acme-drive"] and s.label == frozenset({"sam", "lee"})
+    assert s.state["read"] == ["acme/vault-drive"] and s.label == frozenset({"sam", "lee"})
     assert s.call("Grep", pattern="cash", path=str(world.fetch)) is None
     assert s.call("Bash", command="python3 -c 'import openpyxl' ~/.vaultlines/cache/fetch/acme/vault-drive/Finance/Runway.xlsx") is None
     for tool in ("Write", "Edit"):
@@ -296,66 +296,66 @@ def test_the_fetch_folder_is_denied_where_its_vault_isnt_used(world):
 
 def test_the_briefing(world):
     ctx = Session(world, world.site).context
-    assert ctx.startswith('vaultlines: save notes from this repo to `acme-everyone` (Basic Memory '
-                          'project="acme-everyone"): Notes everyone at Acme can see. You can also read: '
-                          '`acme-docs`, `acme-drive` (The text of every file in the Acme shared drive. Claude only…), ')
-    assert "`acme-founders` (Founders' notes: fundraising, hiring.)" in ctx
+    assert ctx.startswith('vaultlines: save notes from this repo to `acme/vault-everyone` (Basic Memory '
+                          'project="acme/vault-everyone"): Notes everyone at Acme can see. You can also read: '
+                          '`acme/vault-docs`, `acme/vault-drive` (The text of every file in the Acme shared drive. Claude only…), ')
+    assert "`acme/vault-founders` (Founders' notes: fundraising, hiring.)" in ctx
     assert "Writing to those asks first. Other vaults are blocked here. " in ctx
     assert 'Always pass project="..." to Basic Memory tools.' in ctx
-    assert ctx.endswith('`acme-drive` holds notes converted from Google Drive; for an original, run '
+    assert ctx.endswith('`acme/vault-drive` holds notes converted from Google Drive; for an original, run '
                         '`vl source fetch acme/vault-drive "<path from the note\'s frontmatter>"`.')
 
 
 def test_the_briefing_without_plugins_or_reads(world):
     world.runtime["plugins"] = {}
     ctx = Session(world, world.desktop).context
-    assert ctx == ("vaultlines: save notes from this folder to `sam-personal`: sam's personal notes. "
+    assert ctx == ("vaultlines: save notes from this folder to `sam/vault-sam-personal`: sam's personal notes. "
                    "Other vaults are blocked here.")
 
 
 def test_the_briefing_says_why_on_a_conflict(world):
     ctx = Session(world, world.both).context
-    assert ("acme/both is in notes_from of two vaults (acme-everyone, acme-founders), so its notes go to your "
-            "personal vault `acme-sam-personal`.") in ctx
+    assert ("acme/both is in notes_from of two vaults (acme/vault-everyone, acme/vault-founders), so its notes go to your "
+            "personal vault `acme/vault-sam-personal`.") in ctx
 
 
 def test_the_briefing_without_a_writes_vault(world):
     world.runtime["default"] = {"writes": None, "reads": []}
     s = Session(world, world.desktop)
     assert s.last is None
-    out = s.call("Read", file_path=world.vault("sam-personal", "x.md"))
+    out = s.call("Read", file_path=world.vault("sam/vault-sam-personal", "x.md"))
     assert decision(out) == "deny" and "No vaults are set up here" in reason(out)
 
 
 # ---------------------------------------------------------------- sessions
 
 def test_briefing_counts_as_a_read(world):
-    s = Session(world, world.site, briefing=["acme-founders"])
-    assert s.state["read"] == ["acme-founders"]
-    assert decision(s.call("Write", file_path=world.vault("acme-everyone", "n.md"))) == "ask"
+    s = Session(world, world.site, briefing=["acme/vault-founders"])
+    assert s.state["read"] == ["acme/vault-founders"]
+    assert decision(s.call("Write", file_path=world.vault("acme/vault-everyone", "n.md"))) == "ask"
 
 
 def test_fork_starts_as_only_you(world):
     s = Session(world, world.site, source="fork")
     assert s.label == lbl.ONLY_YOU
-    out = s.call("Write", file_path=world.vault("acme-everyone", "n.md"))
+    out = s.call("Write", file_path=world.vault("acme/vault-everyone", "n.md"))
     assert decision(out) == "ask"
     assert "because it was forked" in reason(out)
 
 
 def test_resume_keeps_the_label(world):
     s = Session(world, world.site)
-    s.call("Read", file_path=world.vault("acme-founders", "plan.md"))
+    s.call("Read", file_path=world.vault("acme/vault-founders", "plan.md"))
     resumed = Session(world, world.site, source="resume", state=s.state)
-    assert resumed.state["read"] == ["acme-founders"]
+    assert resumed.state["read"] == ["acme/vault-founders"]
     assert resumed.label == s.label
 
 
 def test_resume_elsewhere_keeps_the_original_rules(world):
     s = Session(world, world.site)
     resumed = Session(world, world.blog, source="resume", state=s.state)
-    assert resumed.rules["writes"] == "acme-everyone"
-    assert "`acme-everyone`" in resumed.context
+    assert resumed.rules["writes"] == "acme/vault-everyone"
+    assert "`acme/vault-everyone`" in resumed.context
 
 
 def test_resume_or_compact_without_a_record_starts_as_only_you(world):
@@ -367,7 +367,7 @@ def test_resume_or_compact_without_a_record_starts_as_only_you(world):
 
 def test_tool_call_without_a_session_record_is_only_you(world):
     out, _ = decide({"hook_event_name": "PreToolUse", "session_id": "x", "cwd": str(world.site),
-                     "tool_name": "Write", "tool_input": {"file_path": world.vault("acme-everyone", "n.md")}},
+                     "tool_name": "Write", "tool_input": {"file_path": world.vault("acme/vault-everyone", "n.md")}},
                     world.runtime, None, str(world.site))
     assert decision(out) == "ask"
     assert "no record of how it started" in reason(out)
@@ -375,7 +375,7 @@ def test_tool_call_without_a_session_record_is_only_you(world):
 
 def test_clear_starts_fresh(world):
     s = Session(world, world.site)
-    s.call("Read", file_path=world.vault("acme-founders", "plan.md"))
+    s.call("Read", file_path=world.vault("acme/vault-founders", "plan.md"))
     cleared = Session(world, world.site, source="clear", state=s.state)
     assert cleared.label is lbl.EVERYONE
     assert cleared.state["read"] == []
@@ -384,16 +384,16 @@ def test_clear_starts_fresh(world):
 def test_the_rules_are_where_the_session_started(world):
     s = Session(world, world.site)
     s.folder = str(world.blog)  # Claude cd'd somewhere else; the tool call's cwd changes
-    assert decision(s.call("Read", file_path=world.vault("acme-slack", "x.md"))) is None
+    assert decision(s.call("Read", file_path=world.vault("acme/vault-slack", "x.md"))) is None
 
 
 # ---------------------------------------------------------------- paths
 
 def test_paths_relative_home_and_symlinks(world, tmp_path):
     rt = world.runtime
-    assert vault_of(world.vault("acme-everyone", "a.md"), rt) == "acme-everyone"
+    assert vault_of(world.vault("acme/vault-everyone", "a.md"), rt) == "acme/vault-everyone"
     link = tmp_path / "link"
-    os.symlink(world.vault("acme-founders"), link)
+    os.symlink(world.vault("acme/vault-founders"), link)
     s = Session(world, world.blog)
     for path in (str(link / "x.md"), "~/.vaultlines/vaults/acme/vault-founders/x.md",
                  "../../.vaultlines/vaults/acme/vault-founders/x.md"):
@@ -402,7 +402,7 @@ def test_paths_relative_home_and_symlinks(world, tmp_path):
 
 def test_a_prefix_of_another_vaults_folder_is_a_different_folder(world):
     rt = world.runtime
-    assert vault_of(world.vault("acme-everyone", "a.md"), rt) == "acme-everyone"
+    assert vault_of(world.vault("acme/vault-everyone", "a.md"), rt) == "acme/vault-everyone"
     assert vault_of(str(world.vaults / "acme" / "vault-everyoneity" / "a.md"), rt) is None
 
 
@@ -419,7 +419,7 @@ def test_grep_over_several_vaults_is_blocked_unless_all_are_in_focus(world):
     assert "search a narrower folder" in reason(out)
     out = s.call("Glob", pattern=str(world.vaults / "sam" / "vault-side" / "**" / "*.md"))
     assert decision(out) is None
-    assert s.state["read"] == ["sam-side"]
+    assert s.state["read"] == ["sam/vault-side"]
 
 
 def test_grep_over_all_of_an_owners_vaults_is_fine_where_all_are_used(world):
@@ -438,28 +438,28 @@ def test_glob_with_an_absolute_pattern(world):
     out = s.call("Glob", pattern="~/.vaultlines/vaults/acme/vault-founders/**/*.md")
     assert decision(out) == "deny"
     assert decision(s.call("Glob", pattern="~/.vaultlines/vaults/sam/vault-side/**/*.md")) is None
-    assert s.state["read"] == ["sam-side"]
+    assert s.state["read"] == ["sam/vault-side"]
 
 
 # ---------------------------------------------------------------- Bash
 
 def test_bash_scan(world):
     rt = world.runtime
-    assert bash_vaults(f"cat {world.vault('acme-everyone', 'a.md')}", "/", rt) == ["acme-everyone"]
-    assert bash_vaults("grep -r x ~/.vaultlines/vaults/acme/vault-founders/", "/", rt) == ["acme-founders"]
-    assert bash_vaults('ls "$HOME/.vaultlines/vaults/sam/vault-side"', "/", rt) == ["sam-side"]
-    assert bash_vaults("ls ${HOME}/.vaultlines/vaults/sam/vault-recipes/", "/", rt) == ["sam-recipes"]
-    assert bash_vaults("ls vault-docs", str(world.vaults / "acme"), rt) == ["acme-docs"]
+    assert bash_vaults(f"cat {world.vault('acme/vault-everyone', 'a.md')}", "/", rt) == ["acme/vault-everyone"]
+    assert bash_vaults("grep -r x ~/.vaultlines/vaults/acme/vault-founders/", "/", rt) == ["acme/vault-founders"]
+    assert bash_vaults('ls "$HOME/.vaultlines/vaults/sam/vault-side"', "/", rt) == ["sam/vault-side"]
+    assert bash_vaults("ls ${HOME}/.vaultlines/vaults/sam/vault-recipes/", "/", rt) == ["sam/vault-recipes"]
+    assert bash_vaults("ls vault-docs", str(world.vaults / "acme"), rt) == ["acme/vault-docs"]
     assert bash_vaults("ls ~/.vaultlines/vaults/acme/vault-everyoneity", "/", rt) == []
-    assert bash_vaults("ls", world.vault("acme-docs", "sub"), rt) == ["acme-docs"]  # cwd inside a vault
-    assert bash_vaults("echo acme-everyone", "/", rt) == []
+    assert bash_vaults("ls", world.vault("acme/vault-docs", "sub"), rt) == ["acme/vault-docs"]  # cwd inside a vault
+    assert bash_vaults("echo acme/vault-everyone", "/", rt) == []
 
 
 def test_bash_counts_as_read_and_write(world):
     s = Session(world, world.site)
-    out = s.call("Bash", command=f"cp ~/.vaultlines/vaults/acme/vault-founders/plan.md {world.vault('acme-everyone')}/")
+    out = s.call("Bash", command=f"cp ~/.vaultlines/vaults/acme/vault-founders/plan.md {world.vault('acme/vault-everyone')}/")
     assert decision(out) == "ask"
-    assert "This session read acme-founders" in reason(out)
+    assert "This session read acme/vault-founders" in reason(out)
     s2 = Session(world, world.site)
     out = s2.call("Bash", command="cat ~/.vaultlines/vaults/acme/vault-slack/x.md")
     assert decision(out) == "ask"
@@ -476,22 +476,22 @@ def test_bash_on_the_writes_vault_is_allowed(world):
 def test_bm_missing_project_is_filled_in(world):
     s = Session(world, world.legal)
     out = s.bm("search_notes", query="pricing")
-    assert out["hookSpecificOutput"]["updatedInput"] == {"query": "pricing", "project": "acme-founders"}
-    assert s.state["read"] == ["acme-founders"]
+    assert out["hookSpecificOutput"]["updatedInput"] == {"query": "pricing", "project": "acme/vault-founders"}
+    assert s.state["read"] == ["acme/vault-founders"]
 
 
 def test_bm_focus_and_label(world):
     s = Session(world, world.site)
-    assert decision(s.bm("read_note", identifier="x", project="sam-personal")) == "deny"
-    s.bm("read_note", identifier="plan", project="acme-founders")
-    assert decision(s.bm("write_note", title="t", content="c", directory="d", project="acme-everyone")) == "ask"
+    assert decision(s.bm("read_note", identifier="x", project="sam/vault-sam-personal")) == "deny"
+    s.bm("read_note", identifier="plan", project="acme/vault-founders")
+    assert decision(s.bm("write_note", title="t", content="c", directory="d", project="acme/vault-everyone")) == "ask"
 
 
 def test_bm_memory_url_counts_its_project(world):
     s = Session(world, world.blog)
-    out = s.bm("build_context", url="memory://acme-founders/plan", project="sam-personal")
+    out = s.bm("build_context", url="memory://acme/vault-founders/plan", project="sam/vault-sam-personal")
     assert decision(out) == "deny"
-    assert "`acme-founders` isn't used" in reason(out)
+    assert "`acme/vault-founders` isn't used" in reason(out)
 
 
 def test_bm_project_that_isnt_a_vault(world):
@@ -507,16 +507,16 @@ def test_bm_blocked_calls(world):
     assert "project_id" in reason(s.bm("read_note", identifier="x", project_id="abc"))
     assert "Searching every project" in reason(s.bm("search_notes", query="x", search_all_projects=True))
     assert "every vault" in reason(s.bm("recent_activity"))
-    assert decision(s.bm("recent_activity", project="acme-founders")) is None
+    assert decision(s.bm("recent_activity", project="acme/vault-founders")) is None
     assert decision(s.bm("fetch", id="x")) == "deny"
-    assert decision(s.bm("delete_project", project_name="acme-founders")) == "deny"
+    assert decision(s.bm("delete_project", project_name="acme/vault-founders")) == "deny"
     assert decision(s.bm("list_memory_projects")) is None
 
 
 def test_bm_plugin_off_lets_calls_through(world):
     world.runtime["plugins"] = {}
     s = Session(world, world.blog)
-    assert s.bm("read_note", identifier="x", project="acme-founders") is None
+    assert s.bm("read_note", identifier="x", project="acme/vault-founders") is None
 
 
 def test_runtime_from_another_version_blocks_basic_memory(world):
@@ -527,7 +527,7 @@ def test_runtime_from_another_version_blocks_basic_memory(world):
     world.runtime["version"] = 3
     write_runtime(world)
     event = {"hook_event_name": "PreToolUse", "session_id": "v1", "cwd": str(world.site),
-             "tool_name": "mcp__basic-memory__read_note", "tool_input": {"identifier": "x", "project": "acme-founders"}}
+             "tool_name": "mcp__basic-memory__read_note", "tool_input": {"identifier": "x", "project": "acme/vault-founders"}}
     out = run(event, env={})
     assert decision(out) == "deny"
     assert "vl apply" in reason(out)
@@ -544,14 +544,14 @@ def _settings(folder, block):
 
 def test_plugin_projects_follow_the_nearest_settings_file(world):
     (world.home / ".claude").mkdir()
-    (world.home / ".claude" / "settings.json").write_text(json.dumps({"basicMemory": {"primaryProject": "sam-personal"}}))
-    _settings(world.site, {"primaryProject": "acme-everyone", "secondaryProjects": ["acme-slack"]})
-    assert plugin_projects(str(world.blog)) == ["sam-personal"]
-    assert plugin_projects(str(world.api)) == ["acme-everyone", "acme-slack"]
+    (world.home / ".claude" / "settings.json").write_text(json.dumps({"basicMemory": {"primaryProject": "sam/vault-sam-personal"}}))
+    _settings(world.site, {"primaryProject": "acme/vault-everyone", "secondaryProjects": ["acme/vault-slack"]})
+    assert plugin_projects(str(world.blog)) == ["sam/vault-sam-personal"]
+    assert plugin_projects(str(world.api)) == ["acme/vault-everyone", "acme/vault-slack"]
     # A folder with its own settings file but no block: the plugin falls back to the user-level block.
     (world.api / ".claude").mkdir()
     (world.api / ".claude" / "settings.json").write_text("{}")
-    assert plugin_projects(str(world.api)) == ["sam-personal"]
+    assert plugin_projects(str(world.api)) == ["sam/vault-sam-personal"]
     # A broken settings file turns the plugin off.
     (world.api / ".claude" / "settings.json").write_text("{nope")
     assert plugin_projects(str(world.api)) == []
@@ -613,22 +613,22 @@ def test_vl_commands_and_config_ask_unless_you_asked(world):
 
 def test_vault_files_in_the_vl_home_are_not_vls_own(world):
     s = Session(world, world.site)
-    assert s.call("Write", file_path=world.vault("acme-everyone", "x.md"), content="x") is None
+    assert s.call("Write", file_path=world.vault("acme/vault-everyone", "x.md"), content="x") is None
     assert s.call("Bash", command="ls ~/.vaultlines/vaults/acme/vault-everyone") is None
 
 
 def test_you_asked_doesnt_skip_leak_checks(world):
     s = Session(world, world.site)
     s.event({"hook_event_name": "UserPromptSubmit", "prompt": "use vl to copy the plan"})
-    s.call("Read", file_path=world.vault("acme-founders", "plan.md"))
-    out = s.call("Bash", command=f"cp ~/.vaultlines/vaults/acme/vault-founders/plan.md {world.vault('acme-everyone')}/ && vl sync")
+    s.call("Read", file_path=world.vault("acme/vault-founders", "plan.md"))
+    out = s.call("Bash", command=f"cp ~/.vaultlines/vaults/acme/vault-founders/plan.md {world.vault('acme/vault-everyone')}/ && vl sync")
     assert decision(out) == "ask"
     assert "ana would see this" in reason(out)
 
 
 def test_guard_and_leak_reasons_combine(world):
     s = Session(world, world.site)
-    s.call("Read", file_path=world.vault("acme-founders", "plan.md"))
+    s.call("Read", file_path=world.vault("acme/vault-founders", "plan.md"))
     out = s.call("Bash", command="cp ~/.vaultlines/vaults/acme/vault-founders/p.md ~/.vaultlines/vaults/acme/vault-everyone/ && vl apply")
     assert decision(out) == "ask"
     assert "vl apply" in reason(out) and "ana would see this" in reason(out)
@@ -666,17 +666,17 @@ def test_dev_mode_skips_every_guard(world):
     assert "dangerously_skip_hook_guards" in out and "Other vaults are blocked here" not in out
     s.event({"hook_event_name": "UserPromptSubmit", "prompt": "tidy up"})
     google = world.vl / "google" / "x.json"
-    for tool, args in (("Read", {"file_path": world.vault("sam-side", "idea.md")}),  # another owner's vault
+    for tool, args in (("Read", {"file_path": world.vault("sam/vault-side", "idea.md")}),  # another owner's vault
                        ("Read", {"file_path": str(google)}),
                        ("Write", {"file_path": str(world.vl / "state" / "runtime.json"), "content": "{}"}),
-                       ("Write", {"file_path": world.vault("acme-drive", "x.md"), "content": "x"}),  # from a source
+                       ("Write", {"file_path": world.vault("acme/vault-drive", "x.md"), "content": "x"}),  # from a source
                        ("Bash", {"command": f"vl apply && cat {google}"}),
                        ("Bash", {"command": "VAULTLINES_HOME=/tmp/x vl status"}),
                        ("Edit", {"file_path": str(world.vl / "config.toml"), "old_string": "a", "new_string": "b"}),
-                       ("mcp__basic-memory__read_note", {"identifier": "x", "project": "acme-founders"})):
+                       ("mcp__basic-memory__read_note", {"identifier": "x", "project": "acme/vault-founders"})):
         assert s.call(tool, **args) is None, (tool, args)
-    s.call("Read", file_path=world.vault("acme-founders", "plan.md"))
-    assert s.call("Write", file_path=world.vault("acme-everyone", "p.md"), content="x") is None  # no leak check
+    s.call("Read", file_path=world.vault("acme/vault-founders", "plan.md"))
+    assert s.call("Write", file_path=world.vault("acme/vault-everyone", "p.md"), content="x") is None  # no leak check
     # Other repos are guarded as always.
     other = Session(world, world.legal)
     other.event({"hook_event_name": "UserPromptSubmit", "prompt": "tidy up"})

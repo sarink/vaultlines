@@ -82,21 +82,13 @@ class Config:
     owners: list[str] = field(default_factory=list)  # joined
     me: str = ""
 
-    @property
-    def shorts(self) -> dict[str, str]:
-        """Vault ID -> short name."""
-        return vlt.short_names(self.vaults)
-
-    def vault(self, ref: str) -> vlt.Vault:
-        """A vault by ID (OWNER/REPO) or short name."""
-        ref = ref.strip().lower()
-        if ref in self.vaults:
-            return self.vaults[ref]
-        by_short = {s: i for i, s in self.shorts.items()}
-        if ref in by_short:
-            return self.vaults[by_short[ref]]
-        known = ", ".join(sorted(self.vaults)) or "none"
-        raise VlError(f"No vault '{ref}' on this computer. Vaults here: {known}")
+    def vault(self, vault_id: str) -> vlt.Vault:
+        """A vault by its ID, OWNER/REPO."""
+        vault_id = vault_id.strip().lower()
+        if vault_id in self.vaults:
+            return self.vaults[vault_id]
+        known = ", ".join(sorted(self.vaults)) or "none yet"
+        raise VlError(f"No vault '{vault_id}' on this computer. A vault is OWNER/REPO, like one of these: {known}")
 
     def personal(self, owner: str) -> str | None:
         """Your personal vault's ID for an owner, if it's on disk."""

@@ -41,7 +41,7 @@ def test_init_makes_your_personal_vault_on_this_computer_only(acme, computer):
     settings = json.loads((computer / ".claude" / "settings.json").read_text())
     assert settings["hooks"]["SessionStart"][0]["hooks"][0]["command"].endswith("vl hook")
     data = runtime.load()
-    assert data["me"] == "alice" and data["default"] == {"writes": "alice-personal", "reads": []}
+    assert data["me"] == "alice" and data["default"] == {"writes": "alice/vault-alice-personal", "reads": []}
 
 
 def test_init_publish_puts_the_personal_vault_on_github(acme, computer):
@@ -65,10 +65,21 @@ def test_org_join_clones_the_vaults_you_can_access(acme, computer):
     assert sorted(found) == ["acme/vault-alice-personal", "acme/vault-private", "acme/vault-public",
                              "alice/vault-alice-personal"]
     assert found["acme/vault-public"].remote == acme.url("acme/vault-public")
-    assert found["acme/vault-alice-personal"].remote is None  # yours, on this computer only
+    assert found["acme/vault-alice-personal"].remote is None  # yours, local
     owners = runtime.load()["owners"]
-    assert owners["acme"]["personal"] == "acme-alice-personal"
-    assert owners["acme"]["notes_from"] == {"acme/marketing": "acme-public"}
+    assert owners["acme"]["personal"] == "acme/vault-alice-personal"
+    assert owners["acme"]["notes_from"] == {"acme/marketing": "acme/vault-public"}
+
+
+def test_vaults_are_shown_by_id(acme, computer, capsys):
+    assert vl("org", "join", "acme") == 0
+    out = capsys.readouterr().out
+    assert "  acme/vault-public          Notes everyone at Acme can see." in out
+    assert vl("status") == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[1].split() == ["vault", "state", "who", "can", "see", "it"]
+    assert any(line.split()[:2] == ["acme/vault-alice-personal", "local,"] for line in lines)
+    assert "notes from acme/marketing -> acme/vault-public" in "\n".join(lines)
 
 
 def test_bob_only_gets_what_github_gives_him(acme, computer):
@@ -121,15 +132,15 @@ def test_vault_create_makes_a_vault_on_this_computer(acme, computer):
     assert problems == [] and info.about == "Founders' notes."
     assert info.notes_from == ["acme/legal-case", "acme/legal"]
     data = runtime.load()
-    assert data["vaults"]["acme-founders"]["audience"]["kind"] == "me"
-    assert "acme-founders" in data["owners"]["acme"]["vaults"]
-    assert data["owners"]["acme"]["notes_from"]["acme/legal-case"] == "acme-founders"
+    assert data["vaults"]["acme/vault-founders"]["audience"]["kind"] == "me"
+    assert "acme/vault-founders" in data["owners"]["acme"]["vaults"]
+    assert data["owners"]["acme"]["notes_from"]["acme/legal-case"] == "acme/vault-founders"
     # The daily check doesn't think it was lost: it was never on GitHub.
     state = json.loads(audience.state_path().read_text())
     state["checked_at"] = 0
     audience.state_path().write_text(json.dumps(state))
     assert vl("sync") == 0
-    assert "acme-founders" in runtime.load()["owners"]["acme"]["vaults"]
+    assert "acme/vault-founders" in runtime.load()["owners"]["acme"]["vaults"]
 
 
 def test_vault_create_publish_makes_a_private_repo(acme, computer):
@@ -139,7 +150,7 @@ def test_vault_create_publish_makes_a_private_repo(acme, computer):
     assert origin(path) == acme.url("acme/vault-design")
     assert vaults.parse_vault_toml((path / "vault.toml").read_text())[0].about == "Design notes."
     assert acme.load()["repos"]["acme/vault-design"] == {"push": ["alice"]}
-    assert "acme-design" in runtime.load()["vaults"]
+    assert "acme/vault-design" in runtime.load()["vaults"]
 
 
 def test_any_local_vault_can_be_published(acme, computer):
@@ -154,7 +165,7 @@ def test_there_is_no_local_owner(acme, computer, capsys):
     assert vl("vault", "create", "local/recipes") == 1
     assert "start with vault-" in capsys.readouterr().err
     assert vl("vault", "create", "alice/vault-recipes") == 0
-    assert "alice-recipes" in runtime.load()["owners"]["alice"]["vaults"]
+    assert "alice/vault-recipes" in runtime.load()["owners"]["alice"]["vaults"]
 
 
 @pytest.mark.parametrize("name, message", [
@@ -218,7 +229,7 @@ def test_sync_finds_new_vaults_and_stops_syncing_lost_ones(acme, computer, capsy
     assert (vaults_dir() / "acme" / "vault-private" / "vault.toml").exists()  # its files stay
     assert vl("status") == 0
     assert "no access on GitHub any more" in capsys.readouterr().out
-    assert "acme-private" not in runtime.load()["owners"]["acme"]["vaults"]
+    assert "acme/vault-private" not in runtime.load()["owners"]["acme"]["vaults"]
 
 
 def test_sync_follows_vault_toml_changes(acme, computer):
@@ -226,7 +237,7 @@ def test_sync_follows_vault_toml_changes(acme, computer):
     work = acme.root / ".work" / "acme" / "vault-public"
     commit_files(work, {"vault.toml": 'about = "Everyone."\nnotes_from = ["acme/studio"]\n'}, "studio")
     assert vl("sync") == 0
-    assert runtime.load()["owners"]["acme"]["notes_from"] == {"acme/studio": "acme-public"}
+    assert runtime.load()["owners"]["acme"]["notes_from"] == {"acme/studio": "acme/vault-public"}
 
 
 @pytest.fixture
@@ -249,9 +260,9 @@ def fake_basic_memory(monkeypatch):
 
 def test_apply_points_basic_memory_at_each_repos_vault(acme, computer, fake_basic_memory, tmp_path):
     vl("org", "join", "acme")
-    assert sorted(fake_basic_memory) == ["acme-alice-personal", "acme-private", "acme-public", "alice-personal"]
+    assert sorted(fake_basic_memory) == ["acme/vault-alice-personal", "acme/vault-private", "acme/vault-public", "alice/vault-alice-personal"]
     user = json.loads((computer / ".claude" / "settings.json").read_text())
-    assert user["basicMemory"]["primaryProject"] == "alice-personal"
+    assert user["basicMemory"]["primaryProject"] == "alice/vault-alice-personal"
     # Claude ran in two clones (the hook records them).
     marketing = tmp_path / "code" / "marketing"
     studio = tmp_path / "code" / "studio"
@@ -263,21 +274,21 @@ def test_apply_points_basic_memory_at_each_repos_vault(acme, computer, fake_basi
     clones_path().write_text(json.dumps({str(marketing): "acme/marketing", str(studio): "acme/studio"}))
     assert vl("apply") == 0
     block = json.loads((marketing / ".claude" / "settings.local.json").read_text())["basicMemory"]
-    assert block["primaryProject"] == "acme-public"
+    assert block["primaryProject"] == "acme/vault-public"
     assert json.loads((studio / ".claude" / "settings.local.json").read_text())["basicMemory"]["primaryProject"] \
-        == "acme-alice-personal"
+        == "acme/vault-alice-personal"
     # vault-public now takes studio's notes too: apply follows.
     work = acme.root / ".work" / "acme" / "vault-public"
     commit_files(work, {"vault.toml": 'notes_from = ["acme/marketing", "acme/studio"]\n'}, "studio")
     assert vl("sync") == 0
     assert json.loads((studio / ".claude" / "settings.local.json").read_text())["basicMemory"]["primaryProject"] \
-        == "acme-public"
+        == "acme/vault-public"
 
 
 def test_leaving_an_owner_removes_its_basic_memory_projects(acme, computer, fake_basic_memory):
     vl("org", "join", "acme")
     vl("org", "leave", "acme")
-    assert sorted(fake_basic_memory) == ["alice-personal"]
+    assert sorted(fake_basic_memory) == ["alice/vault-alice-personal"]
 
 
 def test_turning_basic_memory_off_removes_vls_blocks(acme, computer, fake_basic_memory, tmp_path):
