@@ -595,6 +595,7 @@ def _apply(cfg: Config, fresh: bool = True) -> Applied:
             if plugin and hasattr(plugin, "off"):
                 plugin.off(before.get("state", {}), warnings)
     claude.install_hooks()
+    launchd.keep_current(cfg.sync_interval)
 
     _, errors = write_runtime(cfg, fresh, warnings)
     _refresh_clones(warnings)
