@@ -499,3 +499,15 @@ def test_two_folders_with_one_name_are_told_apart_by_id():
 
     assert drive._choose(ask, "which", items)["id"] == "B2"
     assert shown == ["Plans/ [A1]", "Plans/ [B2]", "Notes/"]
+
+
+@needs_tools
+def test_a_refresh_says_what_it_is_doing(local_drive, capsys):
+    """Listing, downloading and converting take a while: each step says so as it starts."""
+    run, _, _ = local_drive
+    run()
+    out = capsys.readouterr().out
+    assert "Listing Google Drive..." in out
+    assert "Downloading 8 files (" in out
+    assert "Converting 5 files with markitdown..." in out
+    assert out.index("Listing") < out.index("Downloading") < out.index("Converting")

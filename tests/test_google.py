@@ -28,8 +28,9 @@ def no_secrets(text: str) -> bool:
     return "SECRET" not in text
 
 
-def test_login_uses_pkce_and_returns_the_refresh_token(fake):
+def test_login_uses_pkce_and_returns_the_refresh_token(fake, capsys):
     assert google.login(CLIENT, SECRET) == REFRESH
+    assert capsys.readouterr().err.strip().endswith("Logged in to Google.")
     auth = next(r for r in fake.requests if r.startswith("/auth"))
     assert "scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdrive.readonly" in auth
     assert "redirect_uri=http%3A%2F%2F127.0.0.1%3A" in auth

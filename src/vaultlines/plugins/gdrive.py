@@ -605,6 +605,9 @@ def _human(size: int) -> str:
 def _fetch(root: Path, source: dict, remote: str, conf: str | None, force: bool, staged: Path) -> str:
     """List the drive (`remote`, an rclone path; `conf` its rclone.conf), download the files
     that need new notes into `staged`, and save the listing there. Reads `root`, changes nothing."""
+    from ..util import say
+
+    say("Listing Google Drive...")
     files = _list(remote, conf)
     todo, _ = _sort(_plan(root, files, force), files, source.get("max_size") or MAX_SIZE)
     cap, total, now, later = parse_size(MAX_FETCH), 0, [], []
@@ -615,6 +618,8 @@ def _fetch(root: Path, source: dict, remote: str, conf: str | None, force: bool,
         else:
             now.append((c, kind))
             total += size
+    if now:
+        say(f"Downloading {_files(len(now))} ({_human(total)})...")
     where, problems = {}, []
     for i, batch in enumerate(_batches(now)):
         error = _download(remote, conf, [c.file.path for c, _ in batch], str(staged / "files" / str(i)))
@@ -679,6 +684,10 @@ def convert(root: Path, source: dict, vault_id: str, staged: Path) -> str:
             note(c, text=local.read_bytes().decode("utf-8", "replace").lstrip("\ufeff"))
         else:
             jobs.append((c, str(local), kind))
+    if jobs:
+        from ..util import say
+
+        say(f"Converting {_files(len(jobs))} with markitdown...")
     for group in (jobs[i:i + BATCH] for i in range(0, len(jobs), BATCH)):
         for (c, _, _), result in zip(group, _convert([(local, kind) for _, local, kind in group], str(staged))):
             if "error" in result:

@@ -458,6 +458,7 @@ def cmd_source_refresh(args) -> None:
     staged = util.refresh_dir(vault_id)
     again = "vl source refresh" + (f" {args.vault}" if args.vault else "")
     if not args.convert_only:
+        say(f"Refreshing {vault_id} from {kind.NAME}...")
         _take_remote(root)
         shutil.rmtree(staged, ignore_errors=True)
         staged.mkdir(parents=True)

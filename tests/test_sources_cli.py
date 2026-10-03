@@ -397,7 +397,8 @@ def test_refresh_in_the_vault_fetches_converts_commits_and_pushes(fake_github, c
     work = _checkout(fake_github, tmp_path, _local_drive(tmp_path), {"Inbox/by hand.md": "kept\n"})
     monkeypatch.chdir(work / "Inbox")  # anywhere in the clone
     assert vl("source", "refresh") == 0
-    assert "1 new" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert out.startswith("Refreshing acme/vault-hq from Google Drive...\n") and "1 new" in out
     assert _bare_log(fake_github)[0] == "Update from Google Drive"
     bare = fake_github.root / "acme" / "vault-hq.git"
     shown = subprocess.run(["git", "--git-dir", str(bare), "show", "HEAD:Team/Plan.md"], capture_output=True, text=True)

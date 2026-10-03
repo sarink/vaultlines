@@ -158,6 +158,7 @@ def login(client_id: str, client_secret: str, timeout: int = LOGIN_TIMEOUT) -> s
     if not tokens.get("refresh_token") or not tokens.get("access_token"):
         raise VlError("Google didn't send a lasting login. Try again.")
     check_read_only(tokens["access_token"])
+    print("Logged in to Google.", file=sys.stderr)
     return tokens["refresh_token"]
 
 
