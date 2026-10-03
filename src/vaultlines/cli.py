@@ -551,7 +551,7 @@ def cmd_source_fetch(args) -> None:
 
 
 def cmd_source_login(args) -> None:
-    v, kind, source = _source_vault(args.vault)
+    _, kind, source = _source_vault(args.vault)
     if not hasattr(kind, "login"):
         raise VlError(f"{kind.NAME} sources have no login.")
     kind.login(source)
