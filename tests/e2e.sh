@@ -116,7 +116,7 @@ echo "== alice joins acme: one command sets everything up"
 vl alice join acme >/dev/null
 V="$ROOT/alice/.vaultlines/vaults"
 check "vl init ran first: config.toml is comments only" test -z "$(grep -v '^#' "$ROOT/alice/.vaultlines/config.toml" | grep -v '^$' || true)"
-check "your personal vault, on this computer only" test -z "$(git -C "$V/alice/vault-alice-personal" remote)"
+check "your personal vault is local" test -z "$(git -C "$V/alice/vault-alice-personal" remote)"
 check "  ...and one for acme" test -f "$V/acme/vault-alice-personal/vault.toml"
 check "  ...neither on GitHub" jq -e '.repos | has("alice/vault-alice-personal") or has("acme/vault-alice-personal") | not' "$GH"
 check "acme's vaults are cloned" test -d "$V/acme/vault-public/.git" -a -d "$V/acme/vault-private/.git" -a -d "$V/acme/vault-hq/.git"
@@ -211,7 +211,7 @@ vl alice vault create alice/vault-recipes --about "Food." >/dev/null
 check "a new vault stays on this computer" test -z "$(git -C "$V/alice/vault-recipes" remote)"
 vl alice vault create acme/vault-founders --about "Founders." --notes_from acme/studio >/dev/null
 A_STUDIO="$(clone alice acme/studio code/studio)"
-check "  ...an org vault too, with its notes_from" test "$(writes_of alice "$A_STUDIO" st)" = acme/vault-founders
+check "  ...another acme vault too, with its notes_from" test "$(writes_of alice "$A_STUDIO" st)" = acme/vault-founders
 check "  ...and nobody else gets it" jq -e '.repos | has("acme/vault-founders") | not' "$GH"
 mkdir -p "$ROOT/alice/writing"
 cat >> "$CONFIG" <<'EOF'

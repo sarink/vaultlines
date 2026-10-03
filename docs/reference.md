@@ -33,7 +33,7 @@ A source kind is a module in `plugins/`; its API is at the top of `plugins/__ini
 | `check_interval` | `86400` | Seconds between checks with GitHub: new vaults, lost access, who can see each vault. |
 | `on_leak` | `"ask"` | `"block"` refuses a write that would show notes to new people, instead of asking. |
 | `basic_memory` | `true` | Set up Basic Memory. |
-| `[repos."OWNER/REPO"]` | | `writes` (a vault ID), `reads` (added to the owner's vaults), `auto_pull`, `dangerously_skip_hook_guards` (dev mode: the hook guards nothing in sessions here). |
+| `[repos."OWNER/REPO"]` | | `writes` (a vault ID), `reads` (added to the owner's vaults), `auto_pull`, `dangerously_skip_hook_guards` (dev mode: the hook allows every call in sessions here, and the briefing says so; running sessions follow it after `vl apply`). |
 | `[repos."OWNER/*"]` | | `writes` and `reads` for every repo of the owner. A `[repos."OWNER/REPO"]` entry wins. |
 | `[folders."PATH"]` | | `writes` and `reads`, for folders outside repos of owners you joined. The closest entry counts. |
 
@@ -61,7 +61,7 @@ What the hook reads, in `~/.vaultlines/state/runtime.json`. `vl apply` and the d
 
 ## The hook's rules
 
-Claude Code runs `vl hook` at SessionStart, on every prompt, and before Read, Write, Edit, MultiEdit, NotebookEdit, Grep, Glob, Bash and Basic Memory tool calls. It reads only `runtime.json` and `.git/config` files.
+Claude Code runs `vl hook` at SessionStart, on every prompt, and before Read, Write, Edit, MultiEdit, NotebookEdit, Grep, Glob, Bash and Basic Memory tool calls. It never reads TOML or asks GitHub: it reads `runtime.json`, `.git/config` files and its session records.
 
 | When | Rule |
 |---|---|
@@ -73,7 +73,6 @@ Claude Code runs `vl hook` at SessionStart, on every prompt, and before Read, Wr
 | Vault with a source | Read-only, and so is its fetch folder. Bash that mentions it counts as a read. `vl source fetch VAULT` in Bash is a read of that vault. |
 | Basic Memory | A call without `project` gets one: the vault its `memory://` link starts with, or else the session's `writes` vault. `project_id`, `workspace`, searches of every project, and unknown arguments are blocked. |
 | vl's own files | Writes to `~/.vaultlines/state` are blocked, and so is any access to `~/.vaultlines/google`. Edits to `config.toml` or vl's hooks, the commands `vl init`, `apply`, `uninstall`, `join`, `leave`, `vault`, `source login` and `source refresh`, and `VL_*` variables ask, unless your latest message mentions vl. |
-| Dev mode | In a repo whose `[repos]` entry has `dangerously_skip_hook_guards = true`, every call is allowed, and the briefing says so. It applies to running sessions after `vl apply`. |
 
 ## Environment variables
 
@@ -94,6 +93,5 @@ Tests run with `uv run pytest -q` and `tests/e2e.sh`, and set the test-only vari
 
 | Problem | What happens |
 |---|---|
-| Read-only access hides the audience | GitHub lists a private repo's collaborators only to people who can push. With read access to a vault, its audience is "unknown", so after reading it, shared writes ask. |
 | GitHub Actions minutes | Each hourly refresh takes a minute or two. |
-| A bot account costs a seat | The refresh job's Google account should open only the vault's folder, so it's best a bot account: a Google Workspace user (a paid seat) or a new Gmail account. |
+| A bot account costs a seat | With a company Gmail, the refresh job's bot account is a Google Workspace user, which is a paid seat. |

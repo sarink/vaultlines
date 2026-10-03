@@ -74,7 +74,7 @@ vl vault publish acme/vault-design
 
 A flag with `_` sets the key of `vault.toml` with the same name: `--about`, `--notes_from` (give it again for each repo). A flag with `-`, like `--delete-files`, is only an option of its command.
 
-Who can use a published vault is who can access its repo on GitHub. To give someone a vault, give them access to the repo. They get it on their next `vl sync`.
+Who can use a published vault is who can access its repo on GitHub. To give someone a vault, give them access to the repo. They get it at the next daily check with GitHub, or now with `vl sync --check-github`.
 
 **Personal vaults.** For each owner you join, you have a personal vault: `acme/vault-kabir-personal`. Like any new vault, it's local until you publish it. In an organization, its owners can see every published vault.
 
@@ -119,7 +119,7 @@ The fetch checks that the login can only read, and downloads new and changed fil
 
 On your computer, `vl sync` only pulls a vault with a source. Changes made to it here are saved on a branch `local-changes-DATE`, and the vault is reset to GitHub's.
 
-A note looks like this:
+A note looks like this (shortened):
 
 ```yaml
 ---
@@ -157,7 +157,7 @@ dangerously_skip_hook_guards = true
 writes = "kabir/vault-recipes"
 ```
 
-Settings go at the top of the file: `sync_interval` (600 seconds), `check_interval` (86400), `on_leak` (`"ask"` or `"block"`), `basic_memory` (`true`).
+Settings, like `on_leak`, go at the top of the file. [The reference](docs/reference.md) lists every key.
 
 ## Safety
 
@@ -195,7 +195,7 @@ Limits, honestly:
   cache/refresh/              what a refresh fetched, until it's converted
 ```
 
-`vl` also adds its own entries to `~/.claude/settings.json` (hooks), to `<repo>/.claude/settings.local.json` (the Basic Memory project there), to Basic Memory's and Obsidian's lists of vaults, and to `~/Library/LaunchAgents` (background sync).
+`vl` also adds its own entries to `~/.claude/settings.json` (hooks, and the Basic Memory project to write to), to `~/.claude.json` (the Basic Memory server), to `<repo>/.claude/settings.local.json` (the Basic Memory project there), to Basic Memory's and Obsidian's lists of vaults, and to `~/Library/LaunchAgents` (background sync).
 
 ## Commands
 

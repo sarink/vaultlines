@@ -1081,7 +1081,7 @@ def build_parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
     sub.add_parser("apply", help="set up git, Basic Memory and Claude Code again").set_defaults(func=cmd_apply)
     sub.add_parser("doctor", help="check that everything is set up").set_defaults(func=cmd_doctor)
     sub.add_parser("uninstall", help="remove the hooks and stop background sync").set_defaults(func=cmd_uninstall)
-    sub.add_parser("hook", help=argparse.SUPPRESS).set_defaults(func=cmd_hook)
+    sub.add_parser("hook").set_defaults(func=cmd_hook)  # without help, it isn't listed
     return p
 
 
