@@ -48,7 +48,7 @@ def test_one_word_for_each_thing(path):
 # Real names that must never appear: a real company, its people, repos and drive. Written in
 # pieces, so this file doesn't name them either.
 REAL = ["mix" + "im", "jor" + "ge", "shee" + "ty", "0AHF" + "8p0HI9"]
-TRACKED = sorted(ROOT / f for f in subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True,
+TRACKED = sorted(ROOT / f for f in subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, check=True,
                                                   text=True).stdout.split())
 
 
