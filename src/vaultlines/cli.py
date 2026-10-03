@@ -391,6 +391,7 @@ def _create_with_source(args, vault_id: str, notes_from: list[str]) -> None:
             if key not in getattr(kind, "LATER", ()):
                 source[key] = util.ask(f"{key} ({kind.OPTIONS[key]})")
     source, secret, name = kind.create(vault_id, source, util.ask)
+    source = {key: source[key] for key in ("kind", *kind.OPTIONS) if key in source}  # in the kind's order
     problems = kind.validate_source(source)
     if problems:
         raise VlError("; ".join(problems))

@@ -84,6 +84,7 @@ def test_create_makes_the_vault_its_fill_job_and_secret(fake_github, computer, g
     assert info.source == {"kind": "gdrive", "folder_id": HQ, "max_size": "50M",
                            "google_client_id": CLIENT, "google_client_secret": "GOCSPX-x"}
     assert f'folder_id            = "{HQ}"   # Mixim HQ\n' in shown.stdout
+    assert list(info.source) == ["kind", "folder_id", "max_size", "google_client_id", "google_client_secret"]
     workflow = subprocess.run(["git", "--git-dir", str(bare), "show", "HEAD:.github/workflows/vl-source.yml"],
                               capture_output=True, text=True).stdout
     assert workflow == cli.source_workflow(gdrive)

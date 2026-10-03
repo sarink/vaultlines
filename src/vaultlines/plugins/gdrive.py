@@ -81,7 +81,15 @@ Everyone who can read the vault on GitHub reads the text of every file in the fo
 """
 KEYS = {"kind", *OPTIONS}
 # The refresh job's setup, before `vl source refresh`.
-SETUP_STEPS = "      - run: curl -fsSL https://rclone.org/install.sh | sudo bash -s __RCLONE__\n"
+# rclone from its downloads, unpacked outside the checkout so it's never committed.
+SETUP_STEPS = """\
+      - name: Install rclone __RCLONE__
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSLO https://downloads.rclone.org/__RCLONE__/rclone-__RCLONE__-linux-amd64.zip
+          unzip -q rclone-__RCLONE__-linux-amd64.zip
+          sudo install rclone-__RCLONE__-linux-amd64/rclone /usr/local/bin/
+"""
 # rclone exports each Google type to the first of these it supports: Docs to .md,
 # Sheets to .xlsx, Slides and Drawings to .pdf. Forms and others are left out.
 EXPORT_FLAGS = ["--drive-export-formats", "md,xlsx,pdf", "--drive-skip-shortcuts"]

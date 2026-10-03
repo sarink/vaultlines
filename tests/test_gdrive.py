@@ -95,7 +95,10 @@ def test_the_refresh_job_runs_this_version_of_vl_hourly_in_two_steps():
     vl = f'uvx --from "git+https://github.com/sarink/vaultlines@v{__version__}" vl'
     assert 'cron: "17 * * * *"' in text
     assert "concurrency: { group: vl-source }" in text
-    assert "rclone.org/install.sh" in text  # the kind's own setup steps
+    # The kind's own setup: this rclone, from rclone's downloads (its install.sh takes no version),
+    # unpacked outside the checkout, so it's never committed with the notes.
+    zip_url = f"https://downloads.rclone.org/{drive.RCLONE}/rclone-{drive.RCLONE}-linux-amd64.zip"
+    assert zip_url in text and 'cd "$RUNNER_TEMP"' in text and "install.sh" not in text
     fetch = text.index(f"{vl} source refresh --fetch-only ${{{{ inputs.force && '--force' || '' }}}}")
     convert = text.index(f"{vl} source refresh --convert-only")
     # Only the fetch has the login: the convert runs markitdown, and it never sees the token.
