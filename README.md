@@ -8,11 +8,11 @@ GitHub decides who gets which vault, and `vl` stops a Claude session from copyin
 
 ```bash
 uv tool install vaultlines
-vl org join acme
+vl join acme
 cd ~/code/marketing && claude
 ```
 
-That's all. `vl org join` logs you in to GitHub (if needed), finds the `acme` vaults you can access, and clones them. It also sets up Claude Code, Basic Memory and a background sync.
+That's all. `vl join` logs you in to GitHub (if needed), finds the `acme` vaults you can access, and clones them. It also sets up Claude Code, Basic Memory and a background sync.
 
 ## How vl picks the vaults for a session
 
@@ -185,7 +185,7 @@ Settings go at the top of the file: `sync_interval` (600 seconds), `check_interv
 
 Example: Claude reads `acme/vault-private` (Kabir and Lee). Then it wants to write to `acme/vault-public` (everyone at Acme). `vl` asks: "This session read acme-private. ana and raj would see this in acme-public."
 
-`vl` also protects itself. Claude can't write its records or touch your Google login. Changes to `config.toml`, and commands like `vl org` or `vl apply`, ask first unless your message mentions vl.
+`vl` also protects itself. Claude can't write its records or touch your Google login. Changes to `config.toml`, and commands like `vl join` or `vl apply`, ask first unless your message mentions vl.
 
 **Dev mode**, for working on vl itself: `dangerously_skip_hook_guards = true` in a repo's entry in `config.toml`. In sessions in that repo, the hook guards nothing: Claude can read and change every vault and all of `vl`'s own files, your Google logins too, and nothing asks first.
 
@@ -216,8 +216,8 @@ Limits, honestly:
 | Command | What it does |
 |---|---|
 | `vl init [--publish]` | Set up this computer: GitHub login, your personal vault, hooks, sync. `--publish` also publishes your personal vault. |
-| `vl org join ORG` | Get the vaults of a GitHub organization (or user) that you can access. Runs `vl init` first if needed. |
-| `vl org leave ORG` | Stop using an org's vaults. Files move to `~/.vaultlines/left/` (or `--delete-files`). |
+| `vl join OWNER` | Get the vaults of a GitHub organization (or user) that you can access. Runs `vl init` first if needed. |
+| `vl leave OWNER` | Stop using an org's vaults. Files move to `~/.vaultlines/left/` (or `--delete-files`). |
 | `vl vault create VAULT` | A new vault, on this computer. `--about`, `--notes_from`, `--publish`, `--source KIND`. |
 | `vl vault publish VAULT` | Put a local vault on GitHub, as a private repo. |
 | `vl source refresh` / `fetch` / `login` | Vaults with a source (see above). |

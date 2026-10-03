@@ -1,4 +1,4 @@
-"""`vl init`, `vl org join/leave`, `vl vault create/publish`: GitHub decides who gets which vault."""
+"""`vl init`, `vl join`, `vl leave`, `vl vault create`, `vl vault publish`: GitHub decides who gets which vault."""
 
 from __future__ import annotations
 
@@ -44,8 +44,9 @@ def test_init_makes_your_personal_vault_on_this_computer_only(acme, computer):
     assert data["me"] == "alice" and data["default"] == {"writes": "alice/vault-alice-personal", "reads": []}
 
 
-def test_init_publish_puts_the_personal_vault_on_github(acme, computer):
-    assert vl("init", "--publish") == 0
+def test_publishing_the_personal_vault_puts_it_on_github(acme, computer):
+    assert vl("init") == 0
+    assert vl("vault", "publish", "alice/vault-alice-personal") == 0
     personal = vaults_dir() / "alice" / "vault-alice-personal"
     assert origin(personal) == acme.url("alice/vault-alice-personal")
     assert acme.load()["repos"]["alice/vault-alice-personal"] == {"push": ["alice"]}
@@ -59,8 +60,8 @@ def test_init_clones_a_personal_vault_published_from_another_computer(acme, comp
     assert vaults.parse_vault_toml((personal / "vault.toml").read_text())[0].about == "From my laptop."
 
 
-def test_org_join_clones_the_vaults_you_can_access(acme, computer):
-    assert vl("org", "join", "acme") == 0  # runs `vl init` first
+def test_join_clones_the_vaults_you_can_access(acme, computer):
+    assert vl("join", "acme") == 0  # runs `vl init` first
     found = vaults.on_disk()
     assert sorted(found) == ["acme/vault-alice-personal", "acme/vault-private", "acme/vault-public",
                              "alice/vault-alice-personal"]
@@ -72,7 +73,7 @@ def test_org_join_clones_the_vaults_you_can_access(acme, computer):
 
 
 def test_vaults_are_shown_by_id(acme, computer, capsys):
-    assert vl("org", "join", "acme") == 0
+    assert vl("join", "acme") == 0
     out = capsys.readouterr().out
     assert "  acme/vault-public          Notes everyone at Acme can see." in out
     assert vl("status") == 0
@@ -84,45 +85,45 @@ def test_vaults_are_shown_by_id(acme, computer, capsys):
 
 def test_bob_only_gets_what_github_gives_him(acme, computer):
     acme.login("bob")
-    assert vl("org", "join", "acme") == 0
+    assert vl("join", "acme") == 0
     assert sorted(vaults.on_disk()) == ["acme/vault-bob-personal", "acme/vault-public", "bob/vault-bob-personal"]
 
 
 def test_joining_twice_picks_up_new_vaults(acme, computer):
-    vl("org", "join", "acme")
+    vl("join", "acme")
     acme.vault("acme/vault-design", ["alice"])
-    assert vl("org", "join", "acme") == 0
+    assert vl("join", "acme") == 0
     assert "acme/vault-design" in vaults.on_disk()
 
 
 def test_joining_an_owner_that_doesnt_exist(acme, computer, capsys):
     vl("init")
-    assert vl("org", "join", "no-such-org") == 1
+    assert vl("join", "no-such-org") == 1
     assert "no-such-org" in capsys.readouterr().err
     assert not (vaults_dir() / "no-such-org").exists()
 
 
-def test_org_leave_keeps_the_files_unless_asked(acme, computer, capsys):
-    vl("org", "join", "acme")
-    assert vl("org", "leave", "acme") == 0
+def test_leave_keeps_the_files_unless_asked(acme, computer, capsys):
+    vl("join", "acme")
+    assert vl("leave", "acme") == 0
     assert not (vaults_dir() / "acme").exists()
     left = vl_home() / "left" / "acme"
     assert (left / "vault-public" / "vault.toml").exists()
     assert "never published" in capsys.readouterr().out  # the personal vault's notes live only there
     assert "acme" not in runtime.load()["owners"]
-    vl("org", "join", "acme")
-    assert vl("org", "leave", "acme", "--delete-files") == 0
+    vl("join", "acme")
+    assert vl("leave", "acme", "--delete-files") == 0
     assert not (vaults_dir() / "acme").exists()
 
 
 def test_you_cant_leave_your_own_account(acme, computer, capsys):
     vl("init")
-    assert vl("org", "leave", "alice") == 1
+    assert vl("leave", "alice") == 1
     assert "your own account" in capsys.readouterr().err
 
 
 def test_vault_create_makes_a_vault_on_this_computer(acme, computer):
-    vl("org", "join", "acme")
+    vl("join", "acme")
     assert vl("vault", "create", "acme/vault-founders", "--about", "Founders' notes.",
               "--notes_from", "acme/legal-case", "--notes_from", "ACME/Legal") == 0
     path = vaults_dir() / "acme" / "vault-founders"
@@ -143,9 +144,11 @@ def test_vault_create_makes_a_vault_on_this_computer(acme, computer):
     assert "acme/vault-founders" in runtime.load()["owners"]["acme"]["vaults"]
 
 
-def test_vault_create_publish_makes_a_private_repo(acme, computer):
-    vl("org", "join", "acme")
-    assert vl("vault", "create", "acme/vault-design", "--about", "Design notes.", "--publish") == 0
+def test_vault_publish_makes_a_private_repo(acme, computer, capsys):
+    vl("join", "acme")
+    assert vl("vault", "create", "acme/vault-design", "--about", "Design notes.") == 0
+    assert "To publish it: `vl vault publish acme/vault-design`" in capsys.readouterr().out
+    assert vl("vault", "publish", "acme/vault-design") == 0
     path = vaults_dir() / "acme" / "vault-design"
     assert origin(path) == acme.url("acme/vault-design")
     assert vaults.parse_vault_toml((path / "vault.toml").read_text())[0].about == "Design notes."
@@ -153,8 +156,18 @@ def test_vault_create_publish_makes_a_private_repo(acme, computer):
     assert "acme/vault-design" in runtime.load()["vaults"]
 
 
+@pytest.mark.parametrize("args", [
+    ["init", "--publish"],
+    ["vault", "create", "acme/vault-design", "--publish"],
+    ["org", "join", "acme"],
+])
+def test_one_way_to_do_each_thing(acme, computer, args):
+    """Publishing is `vl vault publish`, joining is `vl join`."""
+    assert vl(*args) == 2
+
+
 def test_any_local_vault_can_be_published(acme, computer):
-    vl("org", "join", "acme")
+    vl("join", "acme")
     vl("vault", "create", "acme/vault-founders")
     assert vl("vault", "publish", "acme/vault-founders") == 0
     assert origin(vaults_dir() / "acme" / "vault-founders") == acme.url("acme/vault-founders")
@@ -170,19 +183,19 @@ def test_there_is_no_local_owner(acme, computer, capsys):
 
 @pytest.mark.parametrize("name, message", [
     ("acme/design", "start with vault-"),
-    ("other-org/vault-x", "vl org join other-org"),
+    ("other-org/vault-x", "vl join other-org"),
     ("acme/vault-public", "already"),
     ("acme/vault-notes --notes_from nope", "OWNER/REPO"),
     ("nope", "OWNER/vault-NAME"),
 ])
 def test_vault_create_refuses(acme, computer, capsys, name, message):
-    vl("org", "join", "acme")
+    vl("join", "acme")
     assert vl("vault", "create", *name.split()) != 0
     assert message in capsys.readouterr().err
 
 
 def test_vault_publish(acme, computer, capsys):
-    vl("org", "join", "acme")
+    vl("join", "acme")
     assert vl("vault", "publish", "acme/vault-alice-personal") == 0
     path = vaults_dir() / "acme" / "vault-alice-personal"
     assert origin(path) == acme.url("acme/vault-alice-personal")
@@ -194,7 +207,7 @@ def test_vault_publish(acme, computer, capsys):
 
 
 def test_a_published_personal_vault_is_found_by_whoever_can_access_it(acme, computer):
-    vl("org", "join", "acme")
+    vl("join", "acme")
     vl("vault", "publish", "acme/vault-alice-personal")
     data = acme.load()
     data["repos"]["acme/vault-alice-personal"]["read"] = ["bob"]  # alice shared it
@@ -213,7 +226,7 @@ def vaults_github_list(owner, who, gh):
 
 
 def test_sync_finds_new_vaults_and_stops_syncing_lost_ones(acme, computer, capsys):
-    vl("org", "join", "acme")
+    vl("join", "acme")
     acme.vault("acme/vault-new", ["alice"])
     data = acme.load()
     data["repos"]["acme/vault-private"] = {"push": ["bob"]}  # alice lost access
@@ -233,7 +246,7 @@ def test_sync_finds_new_vaults_and_stops_syncing_lost_ones(acme, computer, capsy
 
 
 def test_sync_follows_vault_toml_changes(acme, computer):
-    vl("org", "join", "acme")
+    vl("join", "acme")
     work = acme.root / ".work" / "acme" / "vault-public"
     commit_files(work, {"vault.toml": 'about = "Everyone."\nnotes_from = ["acme/studio"]\n'}, "studio")
     assert vl("sync") == 0
@@ -259,7 +272,7 @@ def fake_basic_memory(monkeypatch):
 
 
 def test_apply_points_basic_memory_at_each_repos_vault(acme, computer, fake_basic_memory, tmp_path):
-    vl("org", "join", "acme")
+    vl("join", "acme")
     assert sorted(fake_basic_memory) == ["acme/vault-alice-personal", "acme/vault-private", "acme/vault-public", "alice/vault-alice-personal"]
     user = json.loads((computer / ".claude" / "settings.json").read_text())
     assert user["basicMemory"]["primaryProject"] == "alice/vault-alice-personal"
@@ -286,15 +299,15 @@ def test_apply_points_basic_memory_at_each_repos_vault(acme, computer, fake_basi
 
 
 def test_leaving_an_owner_removes_its_basic_memory_projects(acme, computer, fake_basic_memory):
-    vl("org", "join", "acme")
-    vl("org", "leave", "acme")
+    vl("join", "acme")
+    vl("leave", "acme")
     assert sorted(fake_basic_memory) == ["alice/vault-alice-personal"]
 
 
 def test_turning_basic_memory_off_removes_vls_blocks(acme, computer, fake_basic_memory, tmp_path):
     from vaultlines.util import clones_path
 
-    vl("org", "join", "acme")
+    vl("join", "acme")
     repo = tmp_path / "marketing"
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", acme.url("acme/marketing")], check=True)
@@ -309,7 +322,7 @@ def test_turning_basic_memory_off_removes_vls_blocks(acme, computer, fake_basic_
 
 def test_session_checkpoints_never_leave_this_computer(acme, computer):
     """vault-public was made by hand on GitHub: it has no .gitignore from vl."""
-    vl("org", "join", "acme")
+    vl("join", "acme")
     path = vaults_dir() / "acme" / "vault-public"
     (path / "sessions").mkdir()
     (path / "sessions" / "checkpoint.md").write_text("private\n")
@@ -321,7 +334,7 @@ def test_session_checkpoints_never_leave_this_computer(acme, computer):
 
 
 def test_two_edits_to_one_note_keep_both_in_a_vault_made_by_hand(acme, computer, tmp_path):
-    vl("org", "join", "acme")
+    vl("join", "acme")
     path = vaults_dir() / "acme" / "vault-public"
     (path / "n.md").write_text("start\n")
     vl("sync")

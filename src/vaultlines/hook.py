@@ -336,7 +336,7 @@ def _leak_reason(state: dict, runtime: dict, target: str, people: list[str], ext
 # ---------------------------------------------------------------- vl's own files
 
 VL_COMMAND_RE = re.compile(
-    r"(?:^|[\s;&|(`])(?:\S*/)?vl\s+(init|apply|uninstall|org|vault|source\s+(?:login|refresh))\b")
+    r"(?:^|[\s;&|(`])(?:\S*/)?vl\s+(init|apply|uninstall|join|leave|vault|source\s+(?:login|refresh))\b")
 VL_ENV_RE = re.compile(r"\bVL_[A-Z_]+")
 DEV_MODE = ("Dev mode: vl's hook guards nothing here (dangerously_skip_hook_guards in config.toml), so every "
             "vault and vl's own files are open.")

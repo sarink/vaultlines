@@ -113,7 +113,7 @@ for _ in $(seq 50); do [ -s "$ROOT/google.url" ] && break; sleep 0.1; done
 GOOGLE="$(cat "$ROOT/google.url")"
 
 echo "== alice joins acme: one command sets everything up"
-vl alice org join acme >/dev/null
+vl alice join acme >/dev/null
 V="$ROOT/alice/.vaultlines/vaults"
 check "vl init ran first: config.toml is comments only" test -z "$(grep -v '^#' "$ROOT/alice/.vaultlines/config.toml" | grep -v '^$' || true)"
 check "your personal vault, on this computer only" test -z "$(git -C "$V/alice/vault-alice-personal" remote)"
@@ -130,7 +130,7 @@ check "  ...and the conflict" jq -e '.owners["acme"].conflicts["acme/both"] == [
 check "status shows the conflict" grep -q "CONFLICT: acme/both" <<<"$(vl alice status)"
 
 echo "== bob joins: GitHub decides what he gets"
-vl bob org join acme >/dev/null
+vl bob join acme >/dev/null
 VB="$ROOT/bob/.vaultlines/vaults"
 check "bob gets vault-public and vault-hq" test -d "$VB/acme/vault-public/.git" -a -d "$VB/acme/vault-hq/.git"
 check "  ...but not vault-private" test ! -e "$VB/acme/vault-private"
@@ -177,9 +177,9 @@ check "vault-hq is read-only" test "$(hook alice "$A_MKT" "$(write_event "$V/acm
 check "vl's records can't be written" test "$(hook alice "$A_MKT" "$(write_event "$ROOT/alice/.vaultlines/state/runtime.json" m2)")" = deny
 check "Google logins can't be read" test "$(hook alice "$A_MKT" "$(read_event "$ROOT/alice/.vaultlines/google/x.json" m2)")" = deny
 hook alice "$A_MKT" '{"hook_event_name": "UserPromptSubmit", "session_id": "m2", "prompt": "tidy the notes"}' >/dev/null
-check "Claude running vl org leave on its own asks" test "$(hook alice "$A_MKT" "$(bash_event "vl org leave acme" m2)")" = ask
+check "Claude running vl leave on its own asks" test "$(hook alice "$A_MKT" "$(bash_event "vl leave acme" m2)")" = ask
 hook alice "$A_MKT" '{"hook_event_name": "UserPromptSubmit", "session_id": "m2", "prompt": "use vl to leave"}' >/dev/null
-check "  ...but not when you asked for vl" test "$(hook alice "$A_MKT" "$(bash_event "vl org leave acme" m2)")" = allow
+check "  ...but not when you asked for vl" test "$(hook alice "$A_MKT" "$(bash_event "vl leave acme" m2)")" = allow
 check "vl sessions shows the session's vault" grep -q "acme/vault-public" <<<"$(vl alice sessions)"
 check "vl status previews where writes ask" grep -q "writes to acme/vault-public ask after reading acme/vault-private (bob can't see" <<<"$(vl alice sync --check-github >/dev/null; vl alice status)"
 
@@ -316,7 +316,7 @@ check "sync deletes session files older than 30 days" test ! -e "$SESSIONS/m1.js
 check "  ...and keeps new ones" test -e "$SESSIONS/dan.json"
 
 echo "== leave, doctor, uninstall"
-vl bob org leave acme >/dev/null
+vl bob leave acme >/dev/null
 check "leaving keeps the files" test -f "$ROOT/bob/.vaultlines/left/acme/vault-public/notes/From bob.md"
 check "  ...and stops using them" jq -e '.owners | has("acme") | not' <(runtime bob)
 check "doctor passes for alice" vl alice doctor

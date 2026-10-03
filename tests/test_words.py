@@ -14,6 +14,40 @@ ROOT = Path(__file__).resolve().parent.parent
 FILES = sorted([*ROOT.glob("src/vaultlines/**/*.py"), ROOT / "README.md", *ROOT.glob("docs/*.md")])
 
 
+def parsers(parser=None) -> list:
+    """vl's parser and every subcommand's, with a [source] kind's keys as flags of `vl vault create`."""
+    import argparse
+
+    from vaultlines import plugins
+
+    found = [parser]
+    for p in [parser] if parser else [cli.build_parser(["vault", "create", "--source", k]) for k in plugins.SOURCES]:
+        for a in p._actions:
+            if isinstance(a, argparse._SubParsersAction):
+                for child in a.choices.values():
+                    found += parsers(child)
+    return [p for p in found if p]
+
+
+def keys() -> set[str]:
+    """Every key: vault.toml's, and each [source] kind's."""
+    from vaultlines import plugins, vaults
+
+    return {*vaults.KEYS, *(k for kind in plugins.SOURCES.values() for k in kind.OPTIONS)}
+
+
+def test_the_flag_rule():
+    """A flag with _ is a key (--notes_from, --folder_id); a flag with - is only a command option."""
+    known = keys()
+    flags = {f for p in parsers() for a in p._actions for f in a.option_strings if f.startswith("--")}
+    assert "--folder_id" in flags and "--fetch-only" in flags
+    for flag in flags:
+        name = flag[2:]
+        if "_" in name:
+            assert name in known, f"{flag} has _ but isn't a key: spell it with -"
+        assert name.replace("-", "_") not in known or "-" not in name, f"{flag} is a key: spell it with _"
+
+
 def commands() -> dict[str, set[str]]:
     """{command: its actions} from vl's parser."""
     import argparse

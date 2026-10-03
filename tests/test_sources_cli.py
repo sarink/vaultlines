@@ -67,7 +67,7 @@ def hq(fake_github, computer, google_fake):
 
 def test_create_makes_the_vault_its_fill_job_and_secret(fake_github, computer, google_fake, capsys):
     fake_github.org("acme", ["alice"])
-    vl("org", "join", "acme")
+    vl("join", "acme")
     assert vl(*CREATE) == 0
     out, err = capsys.readouterr()
     assert "SECRET" not in out + err
@@ -99,7 +99,7 @@ def test_create_makes_the_vault_its_fill_job_and_secret(fake_github, computer, g
 
 def test_create_takes_every_key_of_the_kind(fake_github, computer, google_fake):
     fake_github.org("acme", ["alice"])
-    vl("org", "join", "acme")
+    vl("join", "acme")
     google_fake.folder("FIN", "Finance", parent=HQ, drive=HQ)
     assert vl(*CREATE, "--folder_id", "FIN", "--max_size", "10M", "--about", "Finance.") == 0
     info = vaults.read("acme/vault-hq", vaults_dir() / "acme" / "vault-hq").info
@@ -147,7 +147,7 @@ def test_create_without_a_terminal_says_what_is_missing_and_how_to_get_it(fake_g
     from vaultlines import util
 
     fake_github.org("acme", ["alice"])
-    vl("org", "join", "acme")
+    vl("join", "acme")
     monkeypatch.setattr(util, "interactive", lambda: False)
     assert vl("vault", "create", "acme/vault-hq", "--source", "gdrive") == 1
     err = capsys.readouterr().err
@@ -158,7 +158,7 @@ def test_create_without_a_terminal_says_what_is_missing_and_how_to_get_it(fake_g
 
 def test_create_asks_for_what_is_missing(fake_github, computer, google_fake, answers, capsys):
     fake_github.org("acme", ["alice"])
-    vl("org", "join", "acme")
+    vl("join", "acme")
     given, asked = answers
     given += ["vault-hq", "acme/vault-hq", CLIENT, "GOCSPX-x", "1"]  # a bad name first; then the first drive
     assert vl("vault", "create", "--source", "gdrive") == 0
@@ -183,7 +183,7 @@ def test_create_without_a_vault_or_a_terminal_says_to_give_one(fake_github, comp
 
 def test_create_asks_again_for_a_bad_answer(fake_github, computer, google_fake, answers, capsys):
     fake_github.org("acme", ["alice"])
-    vl("org", "join", "acme")
+    vl("join", "acme")
     given, asked = answers
     given += ["", CLIENT, "9", "Other (shared drive)"]
     assert vl("vault", "create", "acme/vault-hq", "--source", "gdrive", "--client_secret", "s") == 0
@@ -194,7 +194,7 @@ def test_create_asks_again_for_a_bad_answer(fake_github, computer, google_fake, 
 
 def test_create_walks_the_folders_and_can_go_back(fake_github, computer, google_fake, answers, capsys):
     fake_github.org("acme", ["alice"])
-    vl("org", "join", "acme")
+    vl("join", "acme")
     google_fake.folder("FIN", "Finance", parent=HQ, drive=HQ)
     google_fake.folder("F24", "2024", parent="FIN", drive=HQ)
     google_fake.folder("LEGAL", "Legal", parent=HQ, drive=HQ)
@@ -217,7 +217,7 @@ def test_create_walks_the_folders_and_can_go_back(fake_github, computer, google_
 
 def test_create_asks_nothing_when_every_key_is_given(fake_github, computer, google_fake, answers, capsys):
     fake_github.org("acme", ["alice"])
-    vl("org", "join", "acme")
+    vl("join", "acme")
     assert vl(*CREATE) == 0
     assert answers[1] == [] and "console.cloud.google.com" not in capsys.readouterr().out
 
@@ -232,7 +232,7 @@ def test_create_asks_nothing_when_every_key_is_given(fake_github, computer, goog
 ])
 def test_create_refuses(fake_github, computer, google_fake, capsys, args, message):
     fake_github.org("acme", ["alice"])
-    vl("org", "join", "acme")
+    vl("join", "acme")
     code = vl("vault", "create", "acme/vault-hq", *args)
     assert code != 0
     assert message in capsys.readouterr().err
@@ -241,7 +241,7 @@ def test_create_refuses(fake_github, computer, google_fake, capsys, args, messag
 
 def test_create_refuses_a_bot_that_can_change_drive(fake_github, computer, google_fake, capsys):
     fake_github.org("acme", ["alice"])
-    vl("org", "join", "acme")
+    vl("join", "acme")
     google_fake.scope = "https://www.googleapis.com/auth/drive"
     assert vl(*CREATE) == 1
     assert "can change Google Drive" in capsys.readouterr().err
@@ -252,23 +252,23 @@ def test_create_checks_github_can_take_a_workflow_first(fake_github, computer, g
     from vaultlines import github
 
     fake_github.org("acme", ["alice"])
-    vl("org", "join", "acme")
+    vl("join", "acme")
     monkeypatch.setattr(github, "scopes", lambda: {"repo", "admin:org"})
     assert vl(*CREATE) == 1
     assert "gh auth refresh -h github.com -s workflow" in capsys.readouterr().err
     assert not any(r.startswith("/auth") for r in google_fake.requests)  # stopped before the Google login
 
 
-# ---------------------------------------------------------------- org join, fetch, login, refresh
+# ---------------------------------------------------------------- join, fetch, login, refresh
 
 def test_joining_tells_you_how_to_log_in_for_originals(hq, capsys):
-    assert vl("org", "join", "acme") == 0
+    assert vl("join", "acme") == 0
     assert "vl source login acme/vault-hq" in capsys.readouterr().out
     assert runtime.load()["vaults"]["acme/vault-hq"]["source"] == "gdrive"
 
 
 def test_fetch_logs_in_and_downloads_one_original(hq, capsys):
-    vl("org", "join", "acme")
+    vl("join", "acme")
     capsys.readouterr()
     assert vl("source", "fetch", "acme/vault-hq", "Finance/Runway.xlsx") == 0
     out, err = capsys.readouterr()
@@ -283,7 +283,7 @@ def test_fetch_logs_in_and_downloads_one_original(hq, capsys):
 
 
 def test_fetch_exports_google_files(hq, capsys):
-    vl("org", "join", "acme")
+    vl("join", "acme")
     assert vl("source", "fetch", "acme/vault-hq", "Team/Plan.md") == 0
     path = fetch_dir("acme/vault-hq") / "Team" / "Plan.docx"
     assert capsys.readouterr().out.strip().splitlines()[-1] == str(path)
@@ -297,7 +297,7 @@ def test_fetch_exports_google_files(hq, capsys):
     ("../etc/passwd", "isn't a path inside the drive"),
 ])
 def test_fetch_refuses(hq, capsys, path, message):
-    vl("org", "join", "acme")
+    vl("join", "acme")
     google.save_token(CLIENT, REFRESH)
     capsys.readouterr()
     assert vl("source", "fetch", "acme/vault-hq", path) == 1
@@ -306,14 +306,14 @@ def test_fetch_refuses(hq, capsys, path, message):
 
 
 def test_a_deleted_file_is_no_access_too(hq, google_fake, capsys):
-    vl("org", "join", "acme")
+    vl("join", "acme")
     del google_fake.files["F1"]
     assert vl("source", "fetch", "acme/vault-hq", "Finance/Runway.xlsx") == 1
     assert "can't open this file in Drive" in capsys.readouterr().err
 
 
 def test_source_commands_need_a_vault_with_a_source(hq, capsys):
-    vl("org", "join", "acme")
+    vl("join", "acme")
     for args in (["fetch", "acme/vault-public", "x.pdf"], ["login", "acme/vault-public"],
                  ["refresh", "acme/vault-public"]):
         assert vl("source", *args) == 1
@@ -321,7 +321,7 @@ def test_source_commands_need_a_vault_with_a_source(hq, capsys):
 
 
 def test_fetch_refuses_a_login_that_can_change_drive(hq, google_fake, capsys):
-    vl("org", "join", "acme")
+    vl("join", "acme")
     google.save_token(CLIENT, REFRESH)
     google_fake.scope = "https://www.googleapis.com/auth/drive"
     assert vl("source", "fetch", "acme/vault-hq", "Finance/Runway.xlsx") == 1
@@ -329,14 +329,22 @@ def test_fetch_refuses_a_login_that_can_change_drive(hq, google_fake, capsys):
     assert not (fetch_dir("acme/vault-hq") / "Finance" / "Runway.xlsx").exists()
 
 
-def test_login(hq):
-    vl("org", "join", "acme")
+def test_login(hq, capsys):
+    vl("join", "acme")
+    vl("doctor")
+    assert ("note  acme/vault-hq: not logged in with your own account, for fetching originals and refreshing on "
+            "this computer (`vl source login acme/vault-hq`)") in capsys.readouterr().out
     assert vl("source", "login", "acme/vault-hq") == 0
     assert google.load_token(CLIENT) == REFRESH
+    assert ("Logged in to Google Drive with your own account, read-only. `vl source fetch` and `vl source refresh` "
+            "use it on this computer.") in capsys.readouterr().out
+    vl("doctor")
+    assert ("ok    acme/vault-hq: logged in to Google Drive with your own account, for fetching originals and "
+            "refreshing on this computer") in capsys.readouterr().out
 
 
 def test_sync_only_pulls_a_vault_with_a_source(hq, capsys):
-    vl("org", "join", "acme")
+    vl("join", "acme")
     path = vaults_dir() / "acme" / "vault-hq"
     (path / "Finance" / "Runway.xlsx.md").write_text("edited here\n")
     work = hq.root / ".work" / "acme" / "vault-hq"
@@ -463,7 +471,7 @@ def test_refresh_without_a_login_says_how_to_get_one(fake_github, computer, goog
 
 
 def test_refresh_a_vault_by_name_with_your_own_login(hq, monkeypatch, fetched, capsys):
-    vl("org", "join", "acme")
+    vl("join", "acme")
     monkeypatch.delenv("VL_SOURCE_TOKEN", raising=False)
     google.save_token(CLIENT, REFRESH)
     assert vl("source", "refresh", "acme/vault-hq", "--fetch-only") == 0

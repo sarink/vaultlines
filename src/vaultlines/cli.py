@@ -76,7 +76,7 @@ def _initialized() -> bool:
 def _owner(text: str) -> str:
     owner = text.strip().lower()
     if not re.fullmatch(vlt.OWNER_RE, owner):
-        raise VlError(f"{text!r} isn't a GitHub user or organization name.")
+        raise VlError(f"{text!r} isn't an owner on GitHub: a user or organization name.")
     return owner
 
 
@@ -151,7 +151,7 @@ def _join(owner: str, me: str) -> list[str]:
         _new_vault(personal, _personal_about(owner, me))
         new.append(personal)
         say(f"Made your personal vault {personal}, local: on this computer only. "
-            f"To put it on GitHub: `vl vault publish {personal}`")
+            f"To publish it: `vl vault publish {personal}`")
     return new
 
 
@@ -170,12 +170,12 @@ def _publish(cfg: Config, vault_id: str) -> None:
     others = [x for x in a.logins if x.lower() != (cfg.me or _me())]
     if a.kind == "people" and others:
         warn(f"GitHub says these people can also see {v.id}: {', '.join(others)} "
-             "(organization owners, or the organization's base permission).")
+             "(the owners of the organization, or its base permission).")
     else:
         say(f"Published {v.id}: a private repo that only you can access. Give people access on GitHub.")
 
 
-# ---------------------------------------------------------------- init / org
+# ---------------------------------------------------------------- init / join / leave
 
 REQUIRED = {
     "git": "https://git-scm.com (on macOS: xcode-select --install)",
@@ -213,8 +213,6 @@ def cmd_init(args) -> None:
         if hasattr(plugin, "init"):
             plugin.init(cfg, settings)
     _join(me, me)
-    if args.publish:
-        _publish(config.load(), vlt.personal_id(me, me))
     _apply(config.load())
     say("Claude Code hooks installed: every session is guarded by vl.")
     cfg = config.load()
@@ -223,17 +221,17 @@ def cmd_init(args) -> None:
         say(f"Sync runs every {cfg.sync_interval // 60} min. Log: {contract(launchd.log_path())}")
     elif sys.platform != "darwin":
         say(f"No background sync on this system yet. Add a cron job: */10 * * * * {shutil.which('vl') or 'vl'} sync --background")
-    say("\nDone. Next: `vl org join OWNER` for an organization's vaults. See `vl status`.")
+    say("\nDone. Next: `vl join OWNER` for an owner's vaults, like your organization's on GitHub. See `vl status`.")
 
 
-def cmd_org_join(args) -> None:
-    owner = _owner(args.org)
+def cmd_join(args) -> None:
+    owner = _owner(args.owner)
     if not _initialized():
         say("Setting up vl on this computer first.")
-        cmd_init(argparse.Namespace(publish=False))
+        cmd_init(argparse.Namespace())
     me = _me()
     if owner != me and github.owner_kind(owner) is None:
-        raise VlError(f"GitHub has no user or organization named {owner} that you can see.")
+        raise VlError(f"GitHub has no owner {owner} that you can see: no user or organization by that name.")
     fresh = not (vaults_dir() / owner).exists()
     try:
         _join(owner, me)
@@ -261,8 +259,8 @@ def _unique(path: Path) -> Path:
     return found
 
 
-def cmd_org_leave(args) -> None:
-    owner = _owner(args.org)
+def cmd_leave(args) -> None:
+    owner = _owner(args.owner)
     me = _me()
     if owner == me:
         raise VlError("That's your own account. vl always keeps it: your personal vault lives there.")
@@ -302,7 +300,7 @@ def _new_vault_problem(cfg: Config, text: str) -> str | None:
     if not repo.startswith(vlt.PREFIX):
         return f"Vault repos start with {vlt.PREFIX}, like {owner}/{vlt.PREFIX}{repo}."
     if owner not in cfg.owners:
-        return f"You haven't joined {owner}. Run `vl org join {owner}` first."
+        return f"You haven't joined {owner}. Run `vl join {owner}` first."
     if vault_id in cfg.vaults or vlt.path_of(vault_id).exists():
         return f"{vault_id} is already on this computer."
     return None
@@ -327,11 +325,7 @@ def cmd_vault_create(args) -> None:
     if args.source:
         return _create_with_source(args, vault_id, notes_from)
     _new_vault(vault_id, args.about or "", notes_from)
-    say(f"Made {vault_id}, local: on this computer only.")
-    if args.publish:
-        _publish(config.load(), vault_id)
-    else:
-        say(f"To put it on GitHub: `vl vault publish {vault_id}`")
+    say(f"Made {vault_id}, local: on this computer only. To publish it: `vl vault publish {vault_id}`")
     _apply(config.load())
 
 
@@ -561,7 +555,8 @@ def cmd_source_login(args) -> None:
     if not hasattr(kind, "login"):
         raise VlError(f"{kind.NAME} sources have no login.")
     kind.login(source)
-    say(f"Logged in to {kind.NAME} for {v.id}, read-only. `vl source fetch` can get originals now.")
+    say(f"Logged in to {kind.NAME} with your own account, read-only. `vl source fetch` and `vl source refresh` "
+        "use it on this computer.")
 
 
 # ---------------------------------------------------------------- apply
@@ -964,8 +959,10 @@ def cmd_doctor(args) -> None:
         check(not problems, f"{vid}: [source] in vault.toml is complete", "; ".join(problems))
         if not problems and hasattr(kind, "saved_login"):
             on = kind.saved_login(v.source) is not None
-            say(f"  {'ok  ' if on else 'note'}  {vid}: " + (f"logged in to {kind.NAME} for fetching" if on
-                                                          else f"not logged in for fetching (`vl source login {vid}`)"))
+            what = "for fetching originals and refreshing on this computer"
+            say(f"  {'ok  ' if on else 'note'}  {vid}: " + (f"logged in to {kind.NAME} with your own account, {what}"
+                                                          if on else f"not logged in with your own account, {what} "
+                                                          f"(`vl source login {vid}`)"))
     say("Claude Code")
     hooks = claude.hooks_installed()
     for event in claude.HOOK_EVENTS:
@@ -1011,19 +1008,17 @@ def build_parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
     p.add_argument("--version", action="version", version=f"vaultlines {__version__}")
     sub = p.add_subparsers(dest="command", required=True, metavar="COMMAND")
 
-    s = sub.add_parser("init", help="set up this computer: GitHub login, your personal vault, hooks")
-    s.add_argument("--publish", action="store_true", help="also publish your personal vault (a private repo)")
-    s.set_defaults(func=cmd_init)
-
-    org = sub.add_parser("org", help="join or leave the vaults of a GitHub organization (or user)")
-    osub = org.add_subparsers(dest="org_command", required=True, metavar="ACTION")
-    s = osub.add_parser("join", help="get the org's vaults that you can access")
-    s.add_argument("org", metavar="ORG")
-    s.set_defaults(func=cmd_org_join)
-    s = osub.add_parser("leave", help="stop using the org's vaults (keeps the files unless --delete-files)")
-    s.add_argument("org", metavar="ORG")
-    s.add_argument("--delete-files", action="store_true")
-    s.set_defaults(func=cmd_org_leave)
+    sub.add_parser("init", help="set up this computer: GitHub login, your personal vault, hooks").set_defaults(
+        func=cmd_init)
+    s = sub.add_parser("join", help="get the vaults of an owner on GitHub (a user or organization) that you can "
+                       "access")
+    s.add_argument("owner", metavar="OWNER")
+    s.set_defaults(func=cmd_join)
+    s = sub.add_parser("leave", help="stop using an owner's vaults (keeps the files unless --delete-files)")
+    s.add_argument("owner", metavar="OWNER")
+    s.add_argument("--delete-files", action="store_true", help="delete them, instead of moving them to "
+                   "~/.vaultlines/left/")
+    s.set_defaults(func=cmd_leave)
 
     vault = sub.add_parser("vault", help="create or publish a vault")
     vsub = vault.add_subparsers(dest="vault_command", required=True, metavar="ACTION")
@@ -1032,13 +1027,12 @@ def build_parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
     epilog = f"Source kinds: {kinds}. For a kind's keys: vl vault create --source KIND --help"
     if kind is not None:
         epilog = f"Keys you leave out are asked for.\n\n{getattr(kind, 'GUIDE', '')}".strip()
-    s = vsub.add_parser("create", help="a new vault, on this computer until you publish it", epilog=epilog,
+    s = vsub.add_parser("create", help="a new vault, local until you publish it", epilog=epilog,
                         formatter_class=argparse.RawDescriptionHelpFormatter)
     s.add_argument("vault", metavar="VAULT", nargs="?", help="OWNER/vault-NAME")
     s.add_argument("--about", metavar="TEXT", help="one line about the vault, for Claude")
     s.add_argument("--notes_from", metavar="REPO", action="append", help="a repo whose notes go here (OWNER/REPO); "
                    "give it again for more")
-    s.add_argument("--publish", action="store_true", help="also publish it (a private repo on GitHub)")
     s.add_argument("--source", metavar="KIND", help=f"the vault's notes come from a source ({kinds}). The vault "
                    "is published, and its refresh job runs on GitHub")
     if kind is not None:
@@ -1067,7 +1061,8 @@ def build_parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
     s.add_argument("vault", metavar="VAULT")
     s.add_argument("path", metavar="PATH", help="the `path` from the note's frontmatter")
     s.set_defaults(func=cmd_source_fetch)
-    s = ssub.add_parser("login", help="log in to the vault's source again, for fetching")
+    s = ssub.add_parser("login", help="log in to the vault's source with your own account, for fetching originals "
+                        "and refreshing on this computer")
     s.add_argument("vault", metavar="VAULT")
     s.set_defaults(func=cmd_source_login)
 
@@ -1079,10 +1074,10 @@ def build_parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_sync)
 
     s = sub.add_parser("sessions", help="recent Claude sessions and what they read (for debugging)")
-    s.add_argument("--limit", type=int, default=20)
+    s.add_argument("--limit", metavar="N", type=int, default=20, help="show the N most recent (default: 20)")
     s.set_defaults(func=cmd_sessions)
 
-    sub.add_parser("status", help="vaults by org, who can see each one, where writes will ask").set_defaults(func=cmd_status)
+    sub.add_parser("status", help="vaults by owner, who can see each one, where writes will ask").set_defaults(func=cmd_status)
     sub.add_parser("apply", help="set up git, Basic Memory and Claude Code again").set_defaults(func=cmd_apply)
     sub.add_parser("doctor", help="check that everything is set up").set_defaults(func=cmd_doctor)
     sub.add_parser("uninstall", help="remove the hooks and stop background sync").set_defaults(func=cmd_uninstall)

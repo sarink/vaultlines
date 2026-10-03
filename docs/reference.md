@@ -59,8 +59,8 @@ Vaults are always written as IDs: `OWNER/vault-NAME`. An entry that names a vaul
 
 ```
 vl init [--publish]
-vl org join ORG
-vl org leave ORG [--delete-files]
+vl join OWNER
+vl leave OWNER [--delete-files]
 vl vault create VAULT [--about TEXT] [--notes_from REPO]... [--publish]
 vl vault create VAULT --source KIND [--KEY VALUE]... [--about TEXT]     # always published
 vl vault publish VAULT
@@ -75,7 +75,7 @@ A `VAULT` is `OWNER/vault-NAME` or its short name, like `acme-hq`. Flags that se
 
 ## Discovery
 
-`vl org join` and the daily check with GitHub ask for the org's repos you can access (`orgs/OWNER/repos`, or `user/repos` for your own account), keep the names that start with `vault-`, and check each for `vault.toml`. New vaults are cloned. A vault you can't access any more stops syncing; its files stay, and sessions can't use it.
+`vl join` and the daily check with GitHub ask for the org's repos you can access (`orgs/OWNER/repos`, or `user/repos` for your own account), keep the names that start with `vault-`, and check each for `vault.toml`. New vaults are cloned. A vault you can't access any more stops syncing; its files stay, and sessions can't use it.
 
 ## The hook
 
@@ -91,7 +91,7 @@ For every call:
 4. Writes to a `reads` vault always ask.
 5. A vault with a source (and its fetch folder) is read-only. Bash that mentions it counts as a read.
 6. `vl source fetch VAULT` in Bash is a read of that vault.
-7. vl's own files: writes to `~/.vaultlines/state` are blocked; any access to `~/.vaultlines/google` is blocked; edits to `config.toml`, to vl's hooks, and the commands `vl init`, `apply`, `uninstall`, `org`, `vault`, `source login`, `source refresh`, or `VAULTLINES_*` variables ask, unless your latest message mentions vl.
+7. vl's own files: writes to `~/.vaultlines/state` are blocked; any access to `~/.vaultlines/google` is blocked; edits to `config.toml`, to vl's hooks, and the commands `vl init`, `apply`, `uninstall`, `join`, `leave`, `vault`, `source login`, `source refresh`, or `VAULTLINES_*` variables ask, unless your latest message mentions vl.
 8. Dev mode: in a repo whose `[repos]` entry has `dangerously_skip_hook_guards = true`, the hook allows every call, and the briefing says so. It's read from `runtime.json` on each call, so it applies to running sessions after `vl apply`.
 
 The first session in a new clone counts the vault Basic Memory may have briefed it from before `vl` wrote the repo's block (your personal vault), so its first shared write may ask.

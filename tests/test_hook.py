@@ -587,7 +587,8 @@ def test_vl_commands_and_config_ask_unless_you_asked(world):
     config = world.vl / "config.toml"
     s = Session(world, world.site)
     s.event({"hook_event_name": "UserPromptSubmit", "prompt": "update the notes"})
-    for tool, args in (("Bash", {"command": "vl org leave acme"}),
+    for tool, args in (("Bash", {"command": "vl leave acme"}),
+                       ("Bash", {"command": "vl join other"}),
                        ("Bash", {"command": "cd /tmp && ~/.local/bin/vl uninstall"}),
                        ("Bash", {"command": "vl vault create acme/vault-x"}),
                        ("Bash", {"command": "vl vault create acme/vault-hq --source gdrive"}),
@@ -606,7 +607,7 @@ def test_vl_commands_and_config_ask_unless_you_asked(world):
         assert decision(s.call("Bash", command=harmless)) is None, harmless
 
     s.event({"hook_event_name": "UserPromptSubmit", "prompt": "Run VL apply please"})
-    assert s.call("Bash", command="vl org join acme") is None
+    assert s.call("Bash", command="vl join acme") is None
     assert s.call("Edit", file_path=str(config), old_string="a", new_string="b") is None
     s.event({"hook_event_name": "UserPromptSubmit", "prompt": "thanks, now the README"})
     assert decision(s.call("Bash", command="vl apply")) == "ask"
